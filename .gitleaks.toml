@@ -1,0 +1,41 @@
+title = "Agent Loop Control Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "local-env-assignment-secret"
+description = "Detect likely secrets assigned in local env-style files or scripts."
+regex = '''(?i)(api[_-]?key|secret|token|password|passwd|pwd|private[_-]?key|client[_-]?secret)\s*[:=]\s*['"]?([A-Za-z0-9_./+=:@%~-]{16,})['"]?'''
+secretGroup = 2
+entropy = 3.5
+keywords = [
+  "api",
+  "key",
+  "secret",
+  "token",
+  "password",
+  "passwd",
+  "private",
+  "client"
+]
+tags = ["credential", "local", "generic"]
+
+[[rules]]
+id = "agent-config-inline-secret"
+description = "Detect inline credentials in AI agent configuration files."
+path = '''(?i)(^|/)(\.claude|\.codex|\.agent|\.agents|\.cursor|\.continue|\.mcp)(/|$).*'''
+regex = '''(?i)(api[_-]?key|auth[_-]?token|bearer|secret|password|private[_-]?key)\s*[:=]\s*['"]?([A-Za-z0-9_./+=:@%~-]{12,})['"]?'''
+secretGroup = 2
+entropy = 3.3
+keywords = ["api", "auth", "token", "secret", "password", "private", "bearer"]
+tags = ["credential", "agent-config"]
+
+[[rules]]
+id = "database-url-with-credential"
+description = "Detect database URLs that embed credentials."
+regex = '''(?i)\b(postgres|postgresql|mysql|mariadb|mongodb|redis|amqp|rabbitmq)://[^/\s:@]+:([^@\s/]{8,})@[^ \n\r\t]+'''
+secretGroup = 2
+entropy = 3.0
+keywords = ["postgres", "postgresql", "mysql", "mongodb", "redis", "amqp", "rabbitmq"]
+tags = ["credential", "database"]
