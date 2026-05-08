@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/agent-ledger-event.schema.json",
+  "title": "Agent Ledger Event",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "ts",
+    "source",
+    "event_type",
+    "prev_hash",
+    "hash"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier, preferably UUIDv7."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "examples": ["claude-code", "codex-cli", "codex-app"]
+        },
+        "version": {
+          "type": "string"
+        },
+        "collector": {
+          "type": "string"
+        },
+        "raw_event_path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "repo": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "session.start",
+        "session.end",
+        "prompt.submitted",
+        "plan.proposed",
+        "policy.decision",
+        "approval.requested",
+        "approval.resolved",
+        "tool.pre",
+        "tool.post",
+        "tool.error",
+        "file.read",
+        "file.write",
+        "git.diff_snapshot",
+        "verify.result",
+        "recommendation.created",
+        "blind_spot.declared"
+      ]
+    },
+    "tool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "input_summary": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["read", "write", "edit", "delete", "unknown"]
+          },
+          "sha256_before": {
+            "type": "string"
+          },
+          "sha256_after": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["allow", "ask", "deny", "unknown"]
+        },
+        "risk": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical", "unknown"]
+        },
+        "rule_id": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "approval": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["requested", "approved", "denied", "expired", "not_required"]
+        },
+        "reviewer": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "diff": {
+      "type": "object",
+      "properties": {
+        "snapshot_id": {
+          "type": "string"
+        },
+        "patch_sha256": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "blind_spots": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "properties": {
+        "applied": {
+          "type": "boolean"
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "prev_hash": {
+      "type": ["string", "null"],
+      "description": "Previous event hash. Null only for the first event in a ledger."
+    },
+    "hash": {
+      "type": "string",
+      "description": "Hash over canonical event content excluding this field."
+    }
+  },
+  "additionalProperties": true
+}
+

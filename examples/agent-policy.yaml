@@ -1,0 +1,109 @@
+version: 1
+name: default-local-agent-policy
+description: Local-first policy for safe autonomous coding agents.
+
+defaults:
+  decision: ask
+  rationale: Unknown actions require review until a policy rule classifies them.
+
+redaction:
+  enabled: true
+  patterns:
+    - name: env-secret
+      regex: '(?i)(api[_-]?key|secret|token|password)=([^\\s]+)'
+      replacement: '$1=[REDACTED]'
+
+rules:
+  - id: allow-readonly-discovery
+    decision: allow
+    risk: low
+    rationale: Read-only local discovery is safe and high-volume.
+    match:
+      tools:
+        - Glob
+        - Grep
+        - LS
+      commands:
+        prefixes:
+          - pwd
+          - ls
+          - rg
+          - git status
+          - git diff
+          - git log
+
+  - id: allow-local-verification
+    decision: allow
+    risk: low
+    rationale: Local test and lint commands are reversible and expected.
+    match:
+      commands:
+        prefixes:
+          - npm test
+          - npm run test
+          - npm run lint
+          - pnpm test
+          - pnpm lint
+          - uv run
+          - pytest
+          - cargo test
+          - go test
+
+  - id: ask-network-and-dependencies
+    decision: ask
+    risk: medium
+    rationale: Network and dependency operations can change supply-chain state or disclose context.
+    match:
+      tools:
+        - WebFetch
+        - WebSearch
+      commands:
+        prefixes:
+          - curl
+          - wget
+          - npm install
+          - pnpm add
+          - pip install
+          - uv add
+          - cargo add
+
+  - id: ask-git-publish
+    decision: ask
+    risk: medium
+    rationale: Publishing changes should remain a deliberate human decision.
+    match:
+      commands:
+        prefixes:
+          - git push
+          - gh pr create
+          - gh pr merge
+          - gh release
+
+  - id: deny-sensitive-files
+    decision: deny
+    risk: critical
+    rationale: Agents should not read or modify local secrets.
+    match:
+      paths:
+        globs:
+          - .env
+          - .env.*
+          - '**/.env'
+          - '**/.env.*'
+          - secrets/**
+          - .aws/**
+          - .ssh/**
+
+  - id: deny-destructive-commands
+    decision: deny
+    risk: critical
+    rationale: Destructive commands are blocked unless handled by a separate, explicit recovery workflow.
+    match:
+      commands:
+        prefixes:
+          - rm -rf
+          - git reset --hard
+          - git clean -fd
+          - aws secretsmanager
+          - aws iam
+
