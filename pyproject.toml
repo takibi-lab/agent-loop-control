@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-loop-control"
+version = "0.1.0"
+description = "Local-first safety control plane for AI coding agents"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+agent-loop = "agent_loop.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_loop"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

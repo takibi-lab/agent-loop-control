@@ -54,7 +54,9 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 - [docs/architecture.md](docs/architecture.md): system architecture.
 - [docs/roadmap.md](docs/roadmap.md): staged implementation plan.
 - [examples/agent-policy.yaml](examples/agent-policy.yaml): sample policy.
-- [schemas/agent-ledger-event.schema.json](schemas/agent-ledger-event.schema.json): initial event schema.
+- [examples/collector/claude-settings.json](examples/collector/claude-settings.json): sample Claude Code hooks config.
+- [schemas/agent-ledger-event.schema.json](schemas/agent-ledger-event.schema.json): ledger event schema.
+- [schemas/agent-policy.schema.json](schemas/agent-policy.schema.json): policy file schema.
 
 ## Non-Goals
 
@@ -65,8 +67,5 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 
 ## License
 
-Choose before publishing. Recommended starting options:
-
-- Apache-2.0 for permissive enterprise adoption.
-- AGPL-3.0 if the hosted product should remain open when modified.
+Apache-2.0. See [LICENSE](LICENSE).
 

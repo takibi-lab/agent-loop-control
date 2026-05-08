@@ -1,0 +1,70 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-loop hook collect --ledger ~/.agent-loop/ledger.jsonl --policy-file ~/.agent-loop/agent-policy.yaml"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-loop hook collect --ledger ~/.agent-loop/ledger.jsonl --policy-file ~/.agent-loop/agent-policy.yaml"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-loop hook collect --ledger ~/.agent-loop/ledger.jsonl"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-loop hook collect --ledger ~/.agent-loop/ledger.jsonl"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-loop hook collect --ledger ~/.agent-loop/ledger.jsonl"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-loop hook collect --ledger ~/.agent-loop/ledger.jsonl"
+          }
+        ]
+      }
+    ]
+  }
+}

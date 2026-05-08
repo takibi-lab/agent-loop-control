@@ -1,0 +1,4 @@
+{"type": "user", "id": "sess-001", "content": [{"type": "text", "text": "list files in the project"}]}
+{"type": "function_call", "id": "sess-001", "name": "bash", "arguments": {"command": "ls -la"}}
+{"type": "function_call_output", "id": "sess-001", "name": "bash", "exit_code": 0}
+{"type": "assistant", "id": "sess-001", "content": [{"type": "text", "text": "Here are the project files."}]}
