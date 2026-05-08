@@ -4,8 +4,6 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from agent_loop.snapshotter import capture_diff, get_repo_state, take_snapshot
 from agent_loop.verifier import verify_ledger
 

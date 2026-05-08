@@ -7,7 +7,6 @@ and policy improvement candidates.
 import json
 from collections import Counter
 from pathlib import Path
-from typing import Any
 
 
 def _load_events(ledger_path: str | Path) -> list[dict]:
@@ -27,6 +26,11 @@ def _load_events(ledger_path: str | Path) -> list[dict]:
 
 
 def _action_key(event: dict) -> str:
+    """Group similar actions for reports.
+
+    Commands are grouped by their first two words, so `git status --short`
+    and `git status --porcelain` are treated as the same action category.
+    """
     tool = event.get("tool", {})
     if isinstance(tool, dict):
         name = tool.get("name", "")

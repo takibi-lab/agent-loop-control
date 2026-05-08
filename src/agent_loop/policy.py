@@ -6,13 +6,72 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from jsonschema import Draft202012Validator
+from yaml import YAMLError
 
 _DEFAULT_RISK = "unknown"
+_METADATA_KEYS = {"hash", "prev_hash", "event_id", "ts", "schema_version"}
+
+
+class PolicyValidationError(ValueError):
+    """Raised when a policy file is invalid."""
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("\n".join(errors))
+
+
+def _schema_path() -> Path:
+    current = Path(__file__).resolve()
+    candidates = [
+        current.parents[2] / "schemas" / "agent-policy.schema.json",
+        current.parents[1] / "schemas" / "agent-policy.schema.json",
+        Path.cwd() / "schemas" / "agent-policy.schema.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def validate_policy(policy: dict) -> list[str]:
+    """Return validation errors for a parsed policy dict."""
+    errors: list[str] = []
+    schema_path = _schema_path()
+    with schema_path.open(encoding="utf-8") as f:
+        schema = yaml.safe_load(f)
+
+    validator = Draft202012Validator(schema)
+    for error in sorted(validator.iter_errors(policy), key=lambda e: list(e.path)):
+        path = ".".join(str(part) for part in error.path) or "<root>"
+        errors.append(f"{path}: {error.message}")
+
+    redaction = policy.get("redaction", {}) if isinstance(policy, dict) else {}
+    if isinstance(redaction, dict):
+        for index, pattern in enumerate(redaction.get("patterns", []) or []):
+            name = pattern.get("name", f"pattern[{index}]") if isinstance(pattern, dict) else f"pattern[{index}]"
+            regex = pattern.get("regex") if isinstance(pattern, dict) else None
+            if isinstance(regex, str):
+                try:
+                    re.compile(regex)
+                except re.error as exc:
+                    errors.append(f"redaction.patterns[{index}] {name!r}: invalid regex: {exc}")
+
+    return errors
 
 
 def load_policy(path: str | Path) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            policy = yaml.safe_load(f)
+    except YAMLError as exc:
+        raise PolicyValidationError([f"<yaml>: {exc}"]) from exc
+    if not isinstance(policy, dict):
+        raise PolicyValidationError(["<root>: policy must be a mapping"])
+    errors = validate_policy(policy)
+    if errors:
+        raise PolicyValidationError(errors)
+    return policy
 
 
 def classify_action(
@@ -59,6 +118,10 @@ def _rule_matches(
     command: str | None,
     path: str | None,
 ) -> bool:
+    """Return True if any matcher in the rule matches the action.
+
+    Within one rule, tools, command prefixes, and path globs use OR semantics.
+    """
     match = rule.get("match", {})
 
     if tool and "tools" in match:
@@ -84,12 +147,15 @@ def load_redaction_patterns(policy: dict) -> list[dict]:
     if not redaction.get("enabled", False):
         return []
     result = []
-    for p in redaction.get("patterns", []):
+    errors: list[str] = []
+    for index, p in enumerate(redaction.get("patterns", [])):
         try:
             compiled = re.compile(p["regex"])
             result.append({"name": p["name"], "pattern": compiled, "replacement": p["replacement"]})
-        except re.error:
-            pass
+        except re.error as exc:
+            errors.append(f"redaction.patterns[{index}] {p.get('name', index)!r}: invalid regex: {exc}")
+    if errors:
+        raise PolicyValidationError(errors)
     return result
 
 
@@ -107,32 +173,30 @@ def redact_string(value: str, patterns: list[dict]) -> tuple[str, list[str]]:
     return value, matched
 
 
-def redact_event(event: dict, patterns: list[dict]) -> dict:
-    """Apply redaction to string fields in an event dict (shallow, selected fields).
+def _redact_value(value: Any, patterns: list[dict], matched: list[str], *, key: str | None = None) -> Any:
+    if key in _METADATA_KEYS:
+        return value
+    if isinstance(value, str):
+        redacted, names = redact_string(value, patterns)
+        matched.extend(names)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_value(item, patterns, matched) for item in value]
+    if isinstance(value, dict):
+        return {k: _redact_value(v, patterns, matched, key=str(k)) for k, v in value.items()}
+    return value
 
-    Adds a 'redaction' metadata object to the event.
+
+def redact_event(event: dict, patterns: list[dict]) -> dict:
+    """Apply redaction recursively to string values in an event dict.
+
+    Event identity and hash-chain metadata keys are preserved.
     """
     if not patterns:
         return event
 
-    _REDACT_FIELDS = ["command", "input_summary"]
     all_matched: list[str] = []
-
-    event = dict(event)
-
-    tool = event.get("tool")
-    if isinstance(tool, dict):
-        tool = dict(tool)
-        for field in _REDACT_FIELDS:
-            if isinstance(tool.get(field), str):
-                tool[field], matched = redact_string(tool[field], patterns)
-                all_matched.extend(matched)
-        event["tool"] = tool
-
-    if isinstance(event.get("prompt"), str):
-        event["prompt"], matched = redact_string(event["prompt"], patterns)
-        all_matched.extend(matched)
-
+    redacted = _redact_value(event, patterns, all_matched)
     unique_matched = list(dict.fromkeys(all_matched))
-    event["redaction"] = {"applied": bool(unique_matched), "patterns": unique_matched}
-    return event
+    redacted["redaction"] = {"applied": bool(unique_matched), "patterns": unique_matched}
+    return redacted

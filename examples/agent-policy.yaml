@@ -10,8 +10,8 @@ redaction:
   enabled: true
   patterns:
     - name: env-secret
-      regex: '(?i)(api[_-]?key|secret|token|password)=([^\\s]+)'
-      replacement: '$1=[REDACTED]'
+      regex: "(?i)(api[_-]?key|secret|token|password)=(\\S+)"
+      replacement: "\\1=[REDACTED]"
 
 rules:
   - id: allow-readonly-discovery
@@ -106,4 +106,3 @@ rules:
           - git clean -fd
           - aws secretsmanager
           - aws iam
-

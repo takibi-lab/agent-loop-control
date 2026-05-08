@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent_loop.ledger import append_event, build_event, now_iso
+from agent_loop.ledger import append_event, build_event
 
 _HOOK_TO_EVENT_TYPE = {
     "UserPromptSubmit": "prompt.submitted",
@@ -51,12 +51,13 @@ def _normalize_hook(hook_data: dict) -> dict[str, Any] | None:
         tool_input = hook_data.get("tool_input") or hook_data.get("toolInput")
         if tool_input:
             if isinstance(tool_input, dict):
+                tool_data["input_full"] = tool_input
                 cmd = tool_input.get("command")
                 if cmd:
                     tool_data["command"] = cmd
                     tool_data["input_summary"] = cmd[:200]
                 else:
-                    tool_data["input_summary"] = json.dumps(tool_input)[:200]
+                    tool_data["input_summary"] = json.dumps(tool_input, ensure_ascii=False)[:200]
             else:
                 tool_data["input_summary"] = str(tool_input)[:200]
 
@@ -132,8 +133,10 @@ def collect_hook_event(
 
         tool_name = event.get("tool", {}).get("name") if isinstance(event.get("tool"), dict) else None
         command = event.get("tool", {}).get("command") if isinstance(event.get("tool"), dict) else None
+        tool_input = event.get("tool", {}).get("input_full") if isinstance(event.get("tool"), dict) else None
+        path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
 
-        decision = classify_action(policy, tool=tool_name, command=command)
+        decision = classify_action(policy, tool=tool_name, command=command, path=path)
         event["policy"] = {
             "decision": decision["decision"],
             "risk": decision["risk"],

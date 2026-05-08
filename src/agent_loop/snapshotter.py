@@ -13,7 +13,7 @@ from agent_loop.ledger import append_event, build_event, new_event_id
 
 
 def _run(args: list[str], cwd: str) -> tuple[str, int]:
-    result = subprocess.run(args, capture_output=True, text=True, cwd=cwd)
+    result = subprocess.run(args, capture_output=True, text=True, cwd=cwd, check=False)
     return result.stdout.strip(), result.returncode
 
 

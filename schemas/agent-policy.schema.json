@@ -86,6 +86,7 @@
           },
           "match": {
             "type": "object",
+            "description": "Rule matchers use OR semantics: if tools, commands, and paths are all present, any matching field matches the rule.",
             "properties": {
               "tools": {
                 "type": "array",

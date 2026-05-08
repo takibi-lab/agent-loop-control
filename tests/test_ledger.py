@@ -1,11 +1,17 @@
 """Tests for ledger writer and verifier."""
 
 import json
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from agent_loop.ledger import _canonical_bytes, _sha256, append_event, build_event
+from agent_loop.ledger import (
+    LedgerAppendError,
+    _canonical_bytes,
+    _sha256,
+    append_event,
+    build_event,
+)
 from agent_loop.verifier import verify_ledger
 
 
@@ -56,6 +62,7 @@ def test_verify_valid_ledger(tmp_path):
     result = verify_ledger(ledger)
     assert result["valid"] is True
     assert result["event_count"] == 3
+    assert result["errors"] == []
 
 
 def test_verify_empty_ledger(tmp_path):
@@ -85,6 +92,7 @@ def test_verify_detects_changed_content(tmp_path):
     result = verify_ledger(ledger)
     assert result["valid"] is False
     assert "hash mismatch" in result["reason"]
+    assert result["errors"]
 
 
 def test_verify_detects_broken_prev_hash(tmp_path):
@@ -110,3 +118,41 @@ def test_verify_invalid_jsonl(tmp_path):
     result = verify_ledger(ledger)
     assert result["valid"] is False
     assert "invalid JSON" in result["reason"]
+
+
+def test_verify_collects_multiple_errors(tmp_path):
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text('{"valid": true}\nnot-json\n{"event_id":"x"}\n', encoding="utf-8")
+    result = verify_ledger(ledger, fail_fast=False)
+    assert result["valid"] is False
+    assert len(result["errors"]) >= 2
+    assert "invalid JSON" in result["errors"][0]
+
+
+def test_append_rejects_malformed_existing_ledger(tmp_path):
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text("not-json\n", encoding="utf-8")
+    with pytest.raises(LedgerAppendError):
+        append_event(ledger, build_event("session.start", "test-agent"))
+
+
+def test_concurrent_appends_preserve_chain(tmp_path):
+    ledger = tmp_path / "ledger.jsonl"
+
+    def append_one(index: int) -> dict:
+        return append_event(
+            ledger,
+            build_event(
+                "tool.pre",
+                "test-agent",
+                extra={"tool": {"name": "Bash", "command": f"echo {index}"}},
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(append_one, range(50)))
+
+    assert len({event["hash"] for event in results}) == 50
+    result = verify_ledger(ledger)
+    assert result["valid"] is True
+    assert result["event_count"] == 50

@@ -47,6 +47,24 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 - Timeline and provenance views.
 - Analyzer for approval fatigue, repeated failures, risky actions, and Skill improvement candidates.
 
+## Policy Semantics
+
+Rules in `agent-policy.yaml` are deterministic and explainable. When one rule contains
+multiple matcher groups such as `tools`, `commands`, and `paths`, those groups use OR
+semantics: any matching group matches the rule. Use separate rule IDs when a workflow
+needs a different rationale or risk label for each condition.
+
+## MVP Trust Boundaries
+
+- Ledger writes use POSIX `fcntl` file locking. Windows support is best-effort in the
+  MVP and does not provide the same locking guarantee.
+- Hook bypasses are outside the evidence boundary. Actions not captured by a collector
+  are not present in the ledger.
+- Provider-side logs and hidden model reasoning are not captured.
+- Redaction is best-effort and depends on policy-provided regular expressions. A weak
+  pattern can miss secrets, and a pathological pattern can slow hook execution.
+- Claude Code `tool.input_full` is persisted only after configured redaction has run.
+
 ## Repository Map
 
 - [docs/project-brief.md](docs/project-brief.md): product brief and positioning.
@@ -68,4 +86,3 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
-

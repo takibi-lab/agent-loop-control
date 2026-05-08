@@ -13,11 +13,13 @@ def verify(ledger):
     """Verify hash-chain integrity of a ledger JSONL file."""
     from agent_loop.verifier import verify_ledger
 
-    result = verify_ledger(ledger)
+    result = verify_ledger(ledger, fail_fast=False)
     if result["valid"]:
         click.echo(f"OK: {result['event_count']} events verified")
     else:
-        click.echo(f"FAIL: {result['reason']}", err=True)
+        click.echo("FAIL: ledger integrity check failed", err=True)
+        for error in result.get("errors") or [result["reason"]]:
+            click.echo(f"- {error}", err=True)
         raise SystemExit(1)
 
 
@@ -30,10 +32,24 @@ def policy():
 @click.argument("policy_file", default="agent-policy.yaml", required=False)
 def policy_check(policy_file):
     """Validate and display a policy YAML file."""
-    from agent_loop.policy import load_policy
+    from agent_loop.policy import (
+        PolicyValidationError,
+        load_policy,
+        load_redaction_patterns,
+    )
 
-    pol = load_policy(policy_file)
-    click.echo(f"OK: policy '{pol['name']}' loaded with {len(pol['rules'])} rules")
+    try:
+        pol = load_policy(policy_file)
+        patterns = load_redaction_patterns(pol)
+    except PolicyValidationError as exc:
+        click.echo(f"FAIL: policy '{policy_file}' is invalid", err=True)
+        for error in exc.errors:
+            click.echo(f"- {error}", err=True)
+        raise SystemExit(1) from exc
+
+    click.echo(f"OK: policy '{pol['name']}' loaded")
+    click.echo(f"Rules: {len(pol['rules'])}")
+    click.echo(f"Redaction patterns: {len(patterns)}")
     click.echo(f"Default decision: {pol['defaults']['decision']}")
 
 
