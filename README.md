@@ -47,6 +47,32 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 - Timeline and provenance views.
 - Analyzer for approval fatigue, repeated failures, risky actions, and Skill improvement candidates.
 
+## CLI
+
+The MVP is implemented as a Python package with no runtime network dependency.
+
+```text
+python3 -m agent_loop.cli --help
+python3 -m agent_loop.cli verify examples/ledger-valid.jsonl
+python3 -m agent_loop.cli policy check --policy examples/agent-policy.yaml --command "git status --short"
+python3 -m agent_loop.cli timeline examples/ledger-valid.jsonl
+python3 -m agent_loop.cli search examples/ledger-valid.jsonl --event-type session.start
+python3 -m agent_loop.cli analyze approvals examples/ledger-valid.jsonl
+```
+
+Package installs expose the same entry point as `agent-loop`.
+
+## Policy Schema
+
+- [schemas/agent-policy.schema.json](schemas/agent-policy.schema.json) defines the sample policy format.
+- [schemas/agent-ledger-event.schema.json](schemas/agent-ledger-event.schema.json) defines the normalized ledger event format.
+
+## Collector Samples
+
+- [examples/claude/settings.json](examples/claude/settings.json) shows a safe Claude Code hook configuration that appends local hook events to `.agent-loop/ledger.jsonl`.
+- [examples/claude/pretooluse.json](examples/claude/pretooluse.json) is a sample Claude hook payload.
+- [examples/codex/session.jsonl](examples/codex/session.jsonl) and [examples/codex/normalized-output.json](examples/codex/normalized-output.json) show Codex session import behavior and blind spot reporting.
+
 ## Repository Map
 
 - [docs/project-brief.md](docs/project-brief.md): product brief and positioning.
@@ -54,6 +80,7 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 - [docs/architecture.md](docs/architecture.md): system architecture.
 - [docs/roadmap.md](docs/roadmap.md): staged implementation plan.
 - [examples/agent-policy.yaml](examples/agent-policy.yaml): sample policy.
+- [schemas/agent-policy.schema.json](schemas/agent-policy.schema.json): policy schema.
 - [schemas/agent-ledger-event.schema.json](schemas/agent-ledger-event.schema.json): initial event schema.
 
 ## Non-Goals
@@ -65,8 +92,4 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 
 ## License
 
-Choose before publishing. Recommended starting options:
-
-- Apache-2.0 for permissive enterprise adoption.
-- AGPL-3.0 if the hosted product should remain open when modified.
-
+Apache-2.0. See [LICENSE](LICENSE).

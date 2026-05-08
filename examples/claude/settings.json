@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-loop collect claude-hook --ledger .agent-loop/ledger.jsonl --policy examples/agent-policy.yaml"
+          }
+        ]
+      }
+    ]
+  }
+}

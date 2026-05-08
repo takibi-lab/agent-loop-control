@@ -1,0 +1,2 @@
+{"type":"tool_call","tool_name":"shell","command":"git status --short","session_id":"codex-example"}
+{"type":"message","content":"unstructured model output"}

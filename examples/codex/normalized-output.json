@@ -1,0 +1,29 @@
+[
+  {
+    "event_type": "tool.pre",
+    "source": {
+      "agent": "codex-cli",
+      "collector": "codex-session-importer"
+    },
+    "session": {
+      "session_id": "codex-example"
+    },
+    "tool": {
+      "name": "shell",
+      "command": "git status --short"
+    }
+  },
+  {
+    "event_type": "blind_spot.declared",
+    "source": {
+      "agent": "codex-cli",
+      "collector": "codex-session-importer"
+    },
+    "session": {
+      "session_id": null
+    },
+    "blind_spots": [
+      "Unsupported or incomplete Codex session record: message"
+    ]
+  }
+]

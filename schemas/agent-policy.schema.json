@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/agent-policy.schema.json",
+  "title": "Agent Policy",
+  "type": "object",
+  "required": ["version", "defaults", "rules"],
+  "properties": {
+    "version": { "type": "integer" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "defaults": {
+      "type": "object",
+      "required": ["decision", "rationale"],
+      "properties": {
+        "decision": { "enum": ["allow", "ask", "deny"] },
+        "risk": { "enum": ["low", "medium", "high", "critical", "unknown"] },
+        "rationale": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "redaction": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "regex"],
+            "properties": {
+              "name": { "type": "string" },
+              "regex": { "type": "string" },
+              "replacement": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "decision", "risk", "rationale", "match"],
+        "properties": {
+          "id": { "type": "string" },
+          "decision": { "enum": ["allow", "ask", "deny"] },
+          "risk": { "enum": ["low", "medium", "high", "critical"] },
+          "rationale": { "type": "string" },
+          "match": {
+            "type": "object",
+            "properties": {
+              "tools": { "type": "array", "items": { "type": "string" } },
+              "commands": {
+                "type": "object",
+                "properties": {
+                  "prefixes": { "type": "array", "items": { "type": "string" } }
+                },
+                "additionalProperties": false
+              },
+              "paths": {
+                "type": "object",
+                "properties": {
+                  "globs": { "type": "array", "items": { "type": "string" } }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false,
+            "minProperties": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
