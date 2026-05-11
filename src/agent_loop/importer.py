@@ -84,6 +84,13 @@ def _normalize_codex_record(record: dict, agent: str) -> dict[str, Any] | None:
                 session_id=session_id,
                 extra={"prompt": str(content)[:500]},
             )
+        if rtype == "assistant" and content:
+            return build_event(
+                "recommendation.created",
+                agent,
+                session_id=session_id,
+                extra={"message": str(content)[:500]},
+            )
         return None
 
     return build_event(

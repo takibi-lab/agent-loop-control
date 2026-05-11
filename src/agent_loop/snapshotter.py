@@ -1,6 +1,6 @@
 """Git diff snapshotter.
 
-Captures repository state and working-tree diff, computes patch_sha256,
+Captures repository state and HEAD-relative diff, computes patch_sha256,
 and emits a git.diff_snapshot ledger event.
 """
 
@@ -40,10 +40,10 @@ def get_repo_state(repo_root: str | Path = ".") -> dict[str, Any] | None:
 
 
 def capture_diff(repo_root: str | Path = ".") -> tuple[str, str]:
-    """Return (diff_summary, patch_sha256) for the current working tree."""
+    """Return (diff_summary, patch_sha256) for staged and unstaged tracked changes."""
     root = str(repo_root)
-    diff_out, _ = _run(["git", "diff", "--stat"], root)
-    patch_out, _ = _run(["git", "diff"], root)
+    diff_out, _ = _run(["git", "diff", "HEAD", "--stat"], root)
+    patch_out, _ = _run(["git", "diff", "HEAD", "--binary"], root)
 
     patch_sha256 = hashlib.sha256(patch_out.encode()).hexdigest()
     return diff_out, patch_sha256

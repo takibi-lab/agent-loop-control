@@ -3,6 +3,7 @@
 from click.testing import CliRunner
 
 from agent_loop.cli import main
+from agent_loop.ledger import append_event, build_event
 
 
 def test_policy_check_success_reports_counts(sample_policy_yaml):
@@ -46,3 +47,21 @@ def test_verify_success(tmp_path):
     result = CliRunner().invoke(main, ["verify", str(ledger)])
     assert result.exit_code == 0
     assert "0 events verified" in result.output
+
+
+def test_search_file_path_matches_tool_input(tmp_path):
+    ledger = tmp_path / "l.jsonl"
+    append_event(
+        ledger,
+        build_event(
+            "tool.pre",
+            "claude-code",
+            extra={"tool": {"name": "Read", "input_full": {"file_path": ".env"}}},
+        ),
+    )
+
+    result = CliRunner().invoke(main, ["search", str(ledger), "--file-path", ".env"])
+
+    assert result.exit_code == 0
+    assert "tool.pre" in result.output
+    assert "1 event(s) matched" in result.output

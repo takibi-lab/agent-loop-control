@@ -48,6 +48,17 @@ def test_capture_diff_returns_patch_hash(tmp_path):
     assert len(patch_sha256) == 64
 
 
+def test_capture_diff_includes_staged_changes(tmp_path):
+    _init_git_repo(tmp_path)
+    (tmp_path / "readme.txt").write_text("hello\nstaged\n")
+    subprocess.run(["git", "add", "readme.txt"], cwd=tmp_path, capture_output=True)
+
+    summary, patch_sha256 = capture_diff(tmp_path)
+
+    assert "readme.txt" in summary
+    assert patch_sha256 != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
 def test_take_snapshot_emits_diff_snapshot_event(tmp_path):
     _init_git_repo(tmp_path)
     ledger = tmp_path / "l.jsonl"

@@ -64,6 +64,8 @@ needs a different rationale or risk label for each condition.
 - Redaction is best-effort and depends on policy-provided regular expressions. A weak
   pattern can miss secrets, and a pathological pattern can slow hook execution.
 - Claude Code `tool.input_full` is persisted only after configured redaction has run.
+- If `redaction.enabled` is set to `false`, full hook inputs may be written to the
+  local ledger without masking. Use this only for ledgers that cannot contain secrets.
 
 ## Repository Map
 

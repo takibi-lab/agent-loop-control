@@ -27,6 +27,79 @@ _BLIND_SPOTS = [
     "Some terminal output may be missing if the agent bypassed hooks.",
 ]
 
+_PATH_KEYS = {"file_path", "path", "paths", "target_file", "target_path", "notebook_path"}
+_COMMAND_KEYS = {"command", "commands", "args", "argv"}
+_DECISION_PRECEDENCE = {"deny": 0, "ask": 1, "allow": 2}
+
+
+def _stringify_command(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = [str(part) for part in value if part is not None]
+        return " ".join(parts) if parts else None
+    return str(value) if value is not None else None
+
+
+def _collect_policy_values(value: Any, *, keys: set[str], join_lists: bool = False) -> list[str]:
+    values: list[str] = []
+
+    def walk(item: Any, key: str | None = None) -> None:
+        if isinstance(item, dict):
+            for child_key, child_value in item.items():
+                walk(child_value, str(child_key))
+            return
+        if isinstance(item, list):
+            if key in keys:
+                if join_lists:
+                    text = _stringify_command(item)
+                    if text:
+                        values.append(text)
+                else:
+                    for child in item:
+                        if isinstance(child, dict | list):
+                            walk(child, key)
+                        elif child is not None:
+                            values.append(str(child))
+            else:
+                for child in item:
+                    walk(child, key)
+            return
+        if key in keys and item is not None:
+            values.append(str(item))
+
+    walk(value)
+    return list(dict.fromkeys(values))
+
+
+def _classify_event(policy: dict, event: dict) -> dict[str, Any]:
+    from agent_loop.policy import classify_action
+
+    tool = event.get("tool", {}) if isinstance(event.get("tool"), dict) else {}
+    tool_name = tool.get("name") if isinstance(tool, dict) else None
+    tool_input = tool.get("input_full") if isinstance(tool, dict) else None
+
+    commands = []
+    if isinstance(tool, dict):
+        commands.extend(
+            cmd
+            for cmd in [
+                _stringify_command(tool.get("command")),
+                _stringify_command(tool.get("input_summary")),
+            ]
+            if cmd
+        )
+    commands.extend(_collect_policy_values(tool_input, keys=_COMMAND_KEYS, join_lists=True))
+
+    paths = _collect_policy_values(tool_input, keys=_PATH_KEYS)
+
+    candidates: list[dict[str, Any]] = []
+    for command in commands or [None]:
+        for path in paths or [None]:
+            candidates.append(classify_action(policy, tool=tool_name, command=command, path=path))
+
+    return min(candidates, key=lambda result: _DECISION_PRECEDENCE.get(result["decision"], 1))
+
 
 def _normalize_hook(hook_data: dict) -> dict[str, Any] | None:
     """Normalize a Claude Code hook payload to a ledger event dict (without hashes)."""
@@ -52,7 +125,7 @@ def _normalize_hook(hook_data: dict) -> dict[str, Any] | None:
         if tool_input:
             if isinstance(tool_input, dict):
                 tool_data["input_full"] = tool_input
-                cmd = tool_input.get("command")
+                cmd = _stringify_command(tool_input.get("command"))
                 if cmd:
                     tool_data["command"] = cmd
                     tool_data["input_summary"] = cmd[:200]
@@ -122,7 +195,6 @@ def collect_hook_event(
 
     if policy_path:
         from agent_loop.policy import (
-            classify_action,
             load_policy,
             load_redaction_patterns,
             redact_event,
@@ -131,12 +203,7 @@ def collect_hook_event(
         policy = load_policy(policy_path)
         patterns = load_redaction_patterns(policy)
 
-        tool_name = event.get("tool", {}).get("name") if isinstance(event.get("tool"), dict) else None
-        command = event.get("tool", {}).get("command") if isinstance(event.get("tool"), dict) else None
-        tool_input = event.get("tool", {}).get("input_full") if isinstance(event.get("tool"), dict) else None
-        path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-
-        decision = classify_action(policy, tool=tool_name, command=command, path=path)
+        decision = _classify_event(policy, event)
         event["policy"] = {
             "decision": decision["decision"],
             "risk": decision["risk"],

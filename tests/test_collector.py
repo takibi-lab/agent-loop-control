@@ -105,6 +105,55 @@ def test_write_tool_path_is_classified(tmp_path, sample_policy_yaml):
     assert event["policy"]["rule_id"] == "deny-sensitive"
 
 
+def test_read_tool_file_path_is_classified(tmp_path, sample_policy_yaml):
+    ledger = tmp_path / "l.jsonl"
+    payload = _make_hook(
+        "PreToolUse",
+        tool_name="Read",
+        tool_input={"file_path": ".env"},
+    )
+    event = collect_hook_event(payload, ledger_path=ledger, policy_path=sample_policy_yaml)
+    assert event["policy"]["decision"] == "deny"
+    assert event["policy"]["rule_id"] == "deny-sensitive"
+
+
+def test_alternate_path_candidates_are_classified(tmp_path, sample_policy_yaml):
+    ledger = tmp_path / "l.jsonl"
+    payload = _make_hook(
+        "PreToolUse",
+        tool_name="Edit",
+        tool_input={"target_file": ".env.local", "new_string": "safe=value"},
+    )
+    event = collect_hook_event(payload, ledger_path=ledger, policy_path=sample_policy_yaml)
+    assert event["policy"]["decision"] == "deny"
+    assert event["policy"]["rule_id"] == "deny-sensitive"
+
+
+def test_paths_list_candidates_are_classified(tmp_path, sample_policy_yaml):
+    ledger = tmp_path / "l.jsonl"
+    payload = _make_hook(
+        "PreToolUse",
+        tool_name="MultiEdit",
+        tool_input={"paths": ["README.md", ".env"], "edits": []},
+    )
+    event = collect_hook_event(payload, ledger_path=ledger, policy_path=sample_policy_yaml)
+    assert event["policy"]["decision"] == "deny"
+    assert event["policy"]["rule_id"] == "deny-sensitive"
+
+
+def test_bash_argument_array_is_classified(tmp_path, sample_policy_yaml):
+    ledger = tmp_path / "l.jsonl"
+    payload = _make_hook(
+        "PreToolUse",
+        tool_name="Bash",
+        tool_input={"command": ["rm", "-rf", "build"]},
+    )
+    event = collect_hook_event(payload, ledger_path=ledger, policy_path=sample_policy_yaml)
+    assert event["tool"]["command"] == "rm -rf build"
+    assert event["policy"]["decision"] == "deny"
+    assert event["policy"]["rule_id"] == "deny-destructive"
+
+
 def test_ledger_integrity_after_multiple_events(tmp_path):
     ledger = tmp_path / "l.jsonl"
     for hook_type in ("SessionStart", "PreToolUse", "PostToolUse", "SessionEnd"):

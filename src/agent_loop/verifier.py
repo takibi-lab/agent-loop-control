@@ -7,10 +7,13 @@ from agent_loop.ledger import _canonical_bytes, _sha256
 
 
 def _invalid(errors: list[str], event_count: int) -> dict:
+    reason = errors[0] if errors else None
+    if reason and len(errors) > 1:
+        reason = f"{reason} (+{len(errors) - 1} more)"
     return {
         "valid": False,
         "event_count": event_count,
-        "reason": errors[0] if errors else None,
+        "reason": reason,
         "errors": errors,
     }
 
@@ -18,7 +21,7 @@ def _invalid(errors: list[str], event_count: int) -> dict:
 def verify_ledger(path: str | Path, *, fail_fast: bool = True) -> dict:
     """Verify the hash chain of a JSONL ledger file.
 
-    Returns valid, event_count, reason, and errors. reason is the first error.
+    Returns valid, event_count, reason, and errors.
     """
     p = Path(path)
     if not p.exists():

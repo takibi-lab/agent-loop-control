@@ -1,8 +1,10 @@
 import click
 
+from agent_loop import __version__
+
 
 @click.group()
-@click.version_option(package_name="agent-loop-control")
+@click.version_option(version=__version__, package_name="agent-loop-control")
 def main():
     """Local-first safety control plane for AI coding agents."""
 

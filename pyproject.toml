@@ -22,7 +22,8 @@ agent-loop = "agent_loop.cli:main"
 packages = ["src/agent_loop"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"schemas" = "schemas"
+"schemas/agent-ledger-event.schema.json" = "agent_loop/schemas/agent-ledger-event.schema.json"
+"schemas/agent-policy.schema.json" = "agent_loop/schemas/agent-policy.schema.json"
 
 [dependency-groups]
 dev = [

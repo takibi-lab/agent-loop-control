@@ -2,6 +2,7 @@
 
 import fnmatch
 import re
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -21,30 +22,59 @@ class PolicyValidationError(ValueError):
         super().__init__("\n".join(errors))
 
 
-def _schema_path() -> Path:
+def _schema_candidates() -> list[Path]:
     current = Path(__file__).resolve()
-    candidates = [
+    return [
         current.parents[2] / "schemas" / "agent-policy.schema.json",
         current.parents[1] / "schemas" / "agent-policy.schema.json",
         Path.cwd() / "schemas" / "agent-policy.schema.json",
     ]
+
+
+def _schema_path() -> Path:
+    candidates = _schema_candidates()
     for candidate in candidates:
         if candidate.exists():
             return candidate
     return candidates[0]
 
 
+def _load_policy_schema() -> dict:
+    try:
+        schema = resources.files("agent_loop").joinpath("schemas/agent-policy.schema.json")
+        if schema.is_file():
+            with schema.open(encoding="utf-8") as f:
+                return yaml.safe_load(f)
+    except (FileNotFoundError, ModuleNotFoundError):
+        pass
+
+    schema_path = _schema_path()
+    with schema_path.open(encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
 def validate_policy(policy: dict) -> list[str]:
     """Return validation errors for a parsed policy dict."""
     errors: list[str] = []
-    schema_path = _schema_path()
-    with schema_path.open(encoding="utf-8") as f:
-        schema = yaml.safe_load(f)
+    schema = _load_policy_schema()
 
     validator = Draft202012Validator(schema)
     for error in sorted(validator.iter_errors(policy), key=lambda e: list(e.path)):
         path = ".".join(str(part) for part in error.path) or "<root>"
         errors.append(f"{path}: {error.message}")
+
+    rules = policy.get("rules", []) if isinstance(policy, dict) else []
+    if isinstance(rules, list):
+        for rule_index, rule in enumerate(rules):
+            match = rule.get("match", {}) if isinstance(rule, dict) else {}
+            commands = match.get("commands", {}) if isinstance(match, dict) else {}
+            prefixes = commands.get("prefixes", []) if isinstance(commands, dict) else []
+            for prefix_index, prefix in enumerate(prefixes):
+                if isinstance(prefix, str) and prefix.strip() == "":
+                    errors.append(
+                        f"rules[{rule_index}].match.commands.prefixes[{prefix_index}]: "
+                        "empty command prefixes are not allowed"
+                    )
 
     redaction = policy.get("redaction", {}) if isinstance(policy, dict) else {}
     if isinstance(redaction, dict):

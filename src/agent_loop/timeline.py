@@ -50,6 +50,30 @@ def _summarize(event: dict) -> str:
     return "  ".join(parts)
 
 
+def _path_values(value) -> list[str]:
+    paths: list[str] = []
+
+    def walk(item, key: str | None = None) -> None:
+        if isinstance(item, dict):
+            if key == "files" and "path" in item:
+                paths.append(str(item["path"]))
+            for child_key, child_value in item.items():
+                walk(child_value, str(child_key))
+            return
+        if isinstance(item, list):
+            if key in {"paths", "file_paths"}:
+                paths.extend(str(child) for child in item if child is not None)
+            else:
+                for child in item:
+                    walk(child, key)
+            return
+        if key in {"file_path", "path", "target_file", "target_path", "notebook_path"} and item is not None:
+            paths.append(str(item))
+
+    walk(value)
+    return list(dict.fromkeys(paths))
+
+
 def print_timeline(ledger_path: str | Path, *, limit: int = 50) -> None:
     result = verify_ledger(ledger_path)
     if not result["valid"]:
@@ -98,8 +122,7 @@ def print_search(
             if command.lower() not in cmd_val.lower():
                 continue
         if file_path:
-            files = event.get("files", [])
-            if not any(file_path.lower() in (f.get("path") or "").lower() for f in files):
+            if not any(file_path.lower() in value.lower() for value in _path_values(event)):
                 continue
         matched.append(event)
 

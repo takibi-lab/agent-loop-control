@@ -144,6 +144,29 @@ rules: []
     assert "invalid regex" in str(exc.value)
 
 
+def test_load_policy_rejects_empty_command_prefix(tmp_path):
+    policy = tmp_path / "bad-prefix.yaml"
+    policy.write_text(
+        """
+version: 1
+name: bad-prefix
+defaults:
+  decision: ask
+rules:
+  - id: empty-prefix
+    decision: allow
+    match:
+      commands:
+        prefixes:
+          - ""
+""".lstrip(),
+        encoding="utf-8",
+    )
+    with pytest.raises(PolicyValidationError) as exc:
+        load_policy(policy)
+    assert "empty command prefixes" in str(exc.value)
+
+
 def test_redact_string_applies_pattern():
     patterns = [
         {"name": "api-key", "pattern": re.compile(r"(?i)(api_key)=(\S+)"), "replacement": r"\1=[REDACTED]"}

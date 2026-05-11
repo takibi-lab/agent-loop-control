@@ -59,6 +59,18 @@ def test_unsupported_record_emits_blind_spot(tmp_path):
     assert events[0]["event_type"] == "blind_spot.declared"
 
 
+def test_assistant_record_is_imported(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(session, [{"type": "assistant", "content": "Use a safer command."}])
+    ledger = tmp_path / "l.jsonl"
+    count = import_codex_session(session, ledger_path=ledger)
+    assert count == 1
+
+    events = [json.loads(l) for l in ledger.read_text().splitlines()]
+    assert events[0]["event_type"] == "recommendation.created"
+    assert events[0]["message"] == "Use a safer command."
+
+
 def test_malformed_jsonl_emits_blind_spot(tmp_path):
     session = tmp_path / "session.jsonl"
     session.write_text("not-json\n")
