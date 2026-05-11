@@ -1,0 +1,9 @@
+{
+  "hook_type": "PreToolUse",
+  "session_id": "sess-abc123",
+  "cwd": "/home/user/project",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git status"
+  }
+}

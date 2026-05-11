@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "event_id": "<uuid>",
+  "ts": "<iso8601>",
+  "source": {
+    "agent": "claude-code",
+    "collector": "agent-loop"
+  },
+  "event_type": "tool.pre",
+  "session": {
+    "session_id": "sess-abc123",
+    "cwd": "/home/user/project"
+  },
+  "tool": {
+    "name": "Bash",
+    "command": "git status",
+    "input_summary": "git status"
+  },
+  "prev_hash": null,
+  "hash": "<sha256>"
+}

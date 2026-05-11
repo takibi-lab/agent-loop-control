@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/agent-policy.schema.json",
+  "title": "Agent Policy",
+  "description": "Policy schema for agent-policy.yaml defining allow/ask/deny rules for agent actions.",
+  "type": "object",
+  "required": ["version", "name", "defaults", "rules"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable policy name."
+    },
+    "description": {
+      "type": "string"
+    },
+    "defaults": {
+      "type": "object",
+      "required": ["decision"],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["allow", "ask", "deny"]
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "redaction": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "regex", "replacement"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Pattern identifier recorded in ledger redaction metadata."
+              },
+              "regex": {
+                "type": "string",
+                "description": "Regular expression to match sensitive values."
+              },
+              "replacement": {
+                "type": "string",
+                "description": "Replacement string. May reference capture groups."
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "decision", "match"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique rule identifier referenced in ledger policy decisions."
+          },
+          "decision": {
+            "type": "string",
+            "enum": ["allow", "ask", "deny"]
+          },
+          "risk": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "critical"]
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Human-readable reason for the rule."
+          },
+          "match": {
+            "type": "object",
+            "description": "Rule matchers use OR semantics: if tools, commands, and paths are all present, any matching field matches the rule.",
+            "properties": {
+              "tools": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Agent tool names to match (e.g. Glob, Grep, LS)."
+              },
+              "commands": {
+                "type": "object",
+                "properties": {
+                  "prefixes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Command prefix strings to match."
+                  }
+                },
+                "additionalProperties": false
+              },
+              "paths": {
+                "type": "object",
+                "properties": {
+                  "globs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "File path glob patterns to match."
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {"required": ["tools"]},
+              {"required": ["commands"]},
+              {"required": ["paths"]}
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

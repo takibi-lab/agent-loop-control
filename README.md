@@ -47,6 +47,26 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 - Timeline and provenance views.
 - Analyzer for approval fatigue, repeated failures, risky actions, and Skill improvement candidates.
 
+## Policy Semantics
+
+Rules in `agent-policy.yaml` are deterministic and explainable. When one rule contains
+multiple matcher groups such as `tools`, `commands`, and `paths`, those groups use OR
+semantics: any matching group matches the rule. Use separate rule IDs when a workflow
+needs a different rationale or risk label for each condition.
+
+## MVP Trust Boundaries
+
+- Ledger writes use POSIX `fcntl` file locking. Windows support is best-effort in the
+  MVP and does not provide the same locking guarantee.
+- Hook bypasses are outside the evidence boundary. Actions not captured by a collector
+  are not present in the ledger.
+- Provider-side logs and hidden model reasoning are not captured.
+- Redaction is best-effort and depends on policy-provided regular expressions. A weak
+  pattern can miss secrets, and a pathological pattern can slow hook execution.
+- Claude Code `tool.input_full` is persisted only after configured redaction has run.
+- If `redaction.enabled` is set to `false`, full hook inputs may be written to the
+  local ledger without masking. Use this only for ledgers that cannot contain secrets.
+
 ## Repository Map
 
 - [docs/project-brief.md](docs/project-brief.md): product brief and positioning.
@@ -54,7 +74,9 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 - [docs/architecture.md](docs/architecture.md): system architecture.
 - [docs/roadmap.md](docs/roadmap.md): staged implementation plan.
 - [examples/agent-policy.yaml](examples/agent-policy.yaml): sample policy.
-- [schemas/agent-ledger-event.schema.json](schemas/agent-ledger-event.schema.json): initial event schema.
+- [examples/collector/claude-settings.json](examples/collector/claude-settings.json): sample Claude Code hooks config.
+- [schemas/agent-ledger-event.schema.json](schemas/agent-ledger-event.schema.json): ledger event schema.
+- [schemas/agent-policy.schema.json](schemas/agent-policy.schema.json): policy file schema.
 
 ## Non-Goals
 
@@ -65,8 +87,4 @@ Low-risk actions run automatically. High-risk actions ask for human review. Deni
 
 ## License
 
-Choose before publishing. Recommended starting options:
-
-- Apache-2.0 for permissive enterprise adoption.
-- AGPL-3.0 if the hosted product should remain open when modified.
-
+Apache-2.0. See [LICENSE](LICENSE).
