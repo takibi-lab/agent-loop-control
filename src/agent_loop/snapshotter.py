@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_loop.ledger import append_event, build_event, new_event_id
+from agent_loop.repo_context import resolve_repo_context
 
 
 def _run(args: list[str], cwd: str) -> tuple[str, int]:
@@ -19,24 +20,7 @@ def _run(args: list[str], cwd: str) -> tuple[str, int]:
 
 def get_repo_state(repo_root: str | Path = ".") -> dict[str, Any] | None:
     """Return repo metadata dict, or None if not a git repo."""
-    root = str(repo_root)
-
-    _, rc = _run(["git", "rev-parse", "--is-inside-work-tree"], root)
-    if rc != 0:
-        return None
-
-    branch, _ = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], root)
-    commit, _ = _run(["git", "rev-parse", "HEAD"], root)
-    status_out, _ = _run(["git", "status", "--porcelain"], root)
-
-    repo_root_path, _ = _run(["git", "rev-parse", "--show-toplevel"], root)
-
-    return {
-        "root": repo_root_path or root,
-        "branch": branch or None,
-        "commit": commit or None,
-        "dirty": bool(status_out),
-    }
+    return resolve_repo_context(repo_root)
 
 
 def capture_diff(repo_root: str | Path = ".") -> tuple[str, str]:

@@ -12,6 +12,11 @@ redaction:
     - name: env-secret
       regex: "(?i)(api[_-]?key|secret|token|password)=(\\S+)"
       replacement: "\\1=[REDACTED]"
+    # Optional privacy hardening for shared reports. Enabling this can make
+    # repo.root path filters less precise; prefer repo.remote for shared views.
+    # - name: user-home-path
+    #   regex: "/Users/[^/]+/"
+    #   replacement: "/Users/[USER]/"
 
 rules:
   - id: allow-readonly-discovery

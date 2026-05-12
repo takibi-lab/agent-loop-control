@@ -1,27 +1,11 @@
 """Timeline and search CLI views for the ledger."""
 
-import json
 from pathlib import Path
 
 import click
 
+from agent_loop.ledger_reader import filter_events, load_events
 from agent_loop.verifier import verify_ledger
-
-
-def _load_events(ledger_path: str | Path) -> list[dict]:
-    p = Path(ledger_path)
-    if not p.exists():
-        return []
-    events = []
-    with p.open("r", encoding="utf-8") as f:
-        for raw in f:
-            raw = raw.strip()
-            if raw:
-                try:
-                    events.append(json.loads(raw))
-                except json.JSONDecodeError:
-                    pass
-    return events
 
 
 def _summarize(event: dict) -> str:
@@ -74,12 +58,17 @@ def _path_values(value) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
-def print_timeline(ledger_path: str | Path, *, limit: int = 50) -> None:
+def print_timeline(
+    ledger_path: str | Path,
+    *,
+    limit: int = 50,
+    repo_filter: dict[str, str] | None = None,
+) -> None:
     result = verify_ledger(ledger_path)
     if not result["valid"]:
         click.echo(f"WARNING: ledger integrity check failed: {result['reason']}", err=True)
 
-    events = _load_events(ledger_path)
+    events = filter_events(load_events(ledger_path), repo_filter=repo_filter)
     if not events:
         click.echo("(no events)")
         return
@@ -89,7 +78,7 @@ def print_timeline(ledger_path: str | Path, *, limit: int = 50) -> None:
 
     total = len(events)
     if total > limit:
-        click.echo(f"... ({total - limit} earlier events not shown; use --limit to show more)")
+        click.echo(f"... ({total - limit} earlier matching events not shown; use --limit to show more)")
 
 
 def print_search(
@@ -99,12 +88,13 @@ def print_search(
     decision: str | None = None,
     command: str | None = None,
     file_path: str | None = None,
+    repo_filter: dict[str, str] | None = None,
 ) -> None:
     result = verify_ledger(ledger_path)
     if not result["valid"]:
         click.echo(f"WARNING: ledger integrity check failed: {result['reason']}", err=True)
 
-    events = _load_events(ledger_path)
+    events = filter_events(load_events(ledger_path), repo_filter=repo_filter)
     matched = []
 
     for event in events:

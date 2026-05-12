@@ -4,25 +4,11 @@ Reads ledger events and summarizes approval patterns, repeated low-risk prompts,
 and policy improvement candidates.
 """
 
-import json
 from collections import Counter
 from pathlib import Path
 
-
-def _load_events(ledger_path: str | Path) -> list[dict]:
-    p = Path(ledger_path)
-    if not p.exists():
-        return []
-    events = []
-    with p.open("r", encoding="utf-8") as f:
-        for raw in f:
-            raw = raw.strip()
-            if raw:
-                try:
-                    events.append(json.loads(raw))
-                except json.JSONDecodeError:
-                    pass
-    return events
+from agent_loop.ledger_reader import filter_events, load_events
+from agent_loop.repo_context import repo_label
 
 
 def _action_key(event: dict) -> str:
@@ -35,18 +21,60 @@ def _action_key(event: dict) -> str:
     if isinstance(tool, dict):
         name = tool.get("name", "")
         cmd = tool.get("command") or tool.get("input_summary") or ""
-        if name:
-            return f"tool:{name}"
         if cmd:
             words = cmd.split()
             return "cmd:" + " ".join(words[:2])
+        if name:
+            return f"tool:{name}"
     return "unknown"
 
 
-def analyze_approvals(ledger_path: str | Path) -> str:
-    events = _load_events(ledger_path)
+def _repo_breakdown(events: list[dict]) -> str:
     if not events:
         return "No events in ledger. Nothing to analyze."
+
+    event_counter: Counter = Counter(repo_label(event) for event in events)
+    ask_counter: Counter = Counter(
+        repo_label(event)
+        for event in events
+        if isinstance(event.get("policy"), dict) and event["policy"].get("decision") == "ask"
+    )
+    deny_counter: Counter = Counter(
+        repo_label(event)
+        for event in events
+        if isinstance(event.get("policy"), dict) and event["policy"].get("decision") == "deny"
+    )
+
+    lines = []
+    lines.append("=" * 60)
+    lines.append("APPROVAL ANALYSIS BY REPO")
+    lines.append("=" * 60)
+    lines.append(f"Total events analyzed:       {len(events)}")
+    lines.append("")
+    lines.append("REPOSITORIES (by event count):")
+    for label, count in event_counter.most_common():
+        lines.append(
+            f"  {count:4d}x events  {ask_counter[label]:4d} ask  {deny_counter[label]:4d} deny  {label}"
+        )
+    lines.append("")
+    lines.append("BLIND SPOTS AND ASSUMPTIONS:")
+    lines.append("  - Events without Git context are grouped by session.cwd when available.")
+    lines.append("  - Repository labels prefer repo.remote and fall back to repo.root.")
+    return "\n".join(lines)
+
+
+def analyze_approvals(
+    ledger_path: str | Path,
+    *,
+    repo_filter: dict[str, str] | None = None,
+    group_by: str | None = None,
+) -> str:
+    events = filter_events(load_events(ledger_path), repo_filter=repo_filter)
+    if group_by == "repo":
+        return _repo_breakdown(events)
+
+    if not events:
+        return "No matching events in ledger. Nothing to analyze."
 
     policy_events = [e for e in events if e.get("event_type") == "policy.decision"]
     approval_requests = [e for e in events if e.get("event_type") == "approval.requested"]

@@ -3,6 +3,15 @@ import click
 from agent_loop import __version__
 
 
+def _repo_filter_from_options(repo, repo_root):
+    from agent_loop.repo_context import build_repo_filter
+
+    try:
+        return build_repo_filter(repo=repo, repo_root=repo_root)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+
+
 @click.group()
 @click.version_option(version=__version__, package_name="agent-loop-control")
 def main():
@@ -11,13 +20,24 @@ def main():
 
 @main.command()
 @click.argument("ledger", default="agent-ledger.jsonl", required=False)
-def verify(ledger):
+@click.option("--repo", default=None, help="Show how many verified events match this repo path or remote.")
+@click.option("--repo-root", default=None, help="Show how many verified events match this repo root path.")
+def verify(ledger, repo, repo_root):
     """Verify hash-chain integrity of a ledger JSONL file."""
+    from agent_loop.ledger_reader import filter_events, load_events
     from agent_loop.verifier import verify_ledger
 
     result = verify_ledger(ledger, fail_fast=False)
     if result["valid"]:
-        click.echo(f"OK: {result['event_count']} events verified")
+        repo_filter = _repo_filter_from_options(repo, repo_root)
+        if repo_filter:
+            matched = filter_events(load_events(ledger), repo_filter=repo_filter)
+            click.echo(
+                f"OK: {result['event_count']} events verified; "
+                f"{len(matched)} events match repo filter"
+            )
+        else:
+            click.echo(f"OK: {result['event_count']} events verified")
     else:
         click.echo("FAIL: ledger integrity check failed", err=True)
         for error in result.get("errors") or [result["reason"]]:
@@ -78,11 +98,13 @@ def policy_classify(tool, command, path, policy_file):
 @main.command()
 @click.argument("ledger", default="agent-ledger.jsonl", required=False)
 @click.option("--limit", default=50, show_default=True, help="Maximum events to show.")
-def timeline(ledger, limit):
+@click.option("--repo", default=None, help="Filter by repo path or normalized remote.")
+@click.option("--repo-root", default=None, help="Filter by repo root path.")
+def timeline(ledger, limit, repo, repo_root):
     """Show ordered event summaries from a ledger JSONL file."""
     from agent_loop.timeline import print_timeline
 
-    print_timeline(ledger, limit=limit)
+    print_timeline(ledger, limit=limit, repo_filter=_repo_filter_from_options(repo, repo_root))
 
 
 @main.command()
@@ -91,7 +113,9 @@ def timeline(ledger, limit):
 @click.option("--decision", default=None, help="Filter by policy decision.")
 @click.option("--command", default=None, help="Filter by command text substring.")
 @click.option("--file-path", default=None, help="Filter by file path substring.")
-def search(ledger, event_type, decision, command, file_path):
+@click.option("--repo", default=None, help="Filter by repo path or normalized remote.")
+@click.option("--repo-root", default=None, help="Filter by repo root path.")
+def search(ledger, event_type, decision, command, file_path, repo, repo_root):
     """Search ledger events by type, decision, command, or file path."""
     from agent_loop.timeline import print_search
 
@@ -101,16 +125,24 @@ def search(ledger, event_type, decision, command, file_path):
         decision=decision,
         command=command,
         file_path=file_path,
+        repo_filter=_repo_filter_from_options(repo, repo_root),
     )
 
 
 @main.command()
 @click.argument("ledger", default="agent-ledger.jsonl", required=False)
-def analyze(ledger):
+@click.option("--repo", default=None, help="Filter by repo path or normalized remote.")
+@click.option("--repo-root", default=None, help="Filter by repo root path.")
+@click.option("--group-by", type=click.Choice(["repo"]), default=None, help="Group the analysis.")
+def analyze(ledger, repo, repo_root, group_by):
     """Analyze approval fatigue and suggest policy improvements."""
     from agent_loop.analyzer import analyze_approvals
 
-    report = analyze_approvals(ledger)
+    report = analyze_approvals(
+        ledger,
+        repo_filter=_repo_filter_from_options(repo, repo_root),
+        group_by=group_by,
+    )
     click.echo(report)
 
 
@@ -136,11 +168,12 @@ def hook_collect(ledger, policy_file):
 @click.argument("source_file")
 @click.option("--ledger", default="agent-ledger.jsonl", help="Ledger file path.")
 @click.option("--agent", default="codex-cli", help="Source agent identifier.")
-def import_session(source_file, ledger, agent):
+@click.option("--cwd", default=None, help="Fallback working directory for records without cwd.")
+def import_session(source_file, ledger, agent, cwd):
     """Import a Codex CLI session JSONL file into the ledger."""
     from agent_loop.importer import import_codex_session
 
-    count = import_codex_session(source_file, ledger_path=ledger, agent=agent)
+    count = import_codex_session(source_file, ledger_path=ledger, agent=agent, cwd=cwd)
     click.echo(f"Imported {count} events from {source_file}")
 
 
