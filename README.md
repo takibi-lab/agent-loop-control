@@ -137,12 +137,13 @@ Capture the current Git repository state and staged/unstaged diff hash:
 agent-loop snapshot --ledger ~/.agent-loop/ledger.jsonl --repo .
 ```
 
-Import a Codex CLI session JSONL file:
+Import a Codex CLI or Codex Desktop session JSONL file:
 
 ```bash
 agent-loop import ~/.codex/sessions/<session-file>.jsonl \
   --ledger ~/.agent-loop/ledger.jsonl \
-  --agent codex-cli
+  --agent codex-desktop \
+  --cwd /path/to/repo
 ```
 
 ## Claude Code Hooks

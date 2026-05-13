@@ -98,11 +98,11 @@ Use Claude Code hooks:
 
 The hook collector should read JSON from stdin and append normalized events to the ledger.
 
-## Codex CLI Integration
+## Codex Integration
 
 Use two modes:
 
-1. Import existing Codex session JSONL files.
+1. Import existing Codex CLI or Codex Desktop session JSONL files.
 2. Add Codex hooks when available and enabled.
 
 Codex support should degrade gracefully. If some events cannot be captured, record a blind spot declaration.
@@ -172,4 +172,3 @@ When using an AI agent to develop this repository:
 - When adding a collector, include sample input and normalized output.
 - When adding a policy feature, include allow / ask / deny test cases.
 - When adding an analyzer, include a clear explanation of false positives and blind spots.
-

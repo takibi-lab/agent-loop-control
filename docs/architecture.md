@@ -58,7 +58,7 @@ Examples:
 
 - Claude Code `PreToolUse` with `tool_name: Bash` becomes `tool.pre`.
 - Claude Code `PostToolUse` becomes `tool.post`.
-- Codex session JSONL tool calls become `tool.pre` / `tool.post` when enough information exists.
+- Codex CLI and Codex Desktop session JSONL tool calls become `tool.pre` / `tool.post` when enough information exists.
 
 ### Policy Engine
 
