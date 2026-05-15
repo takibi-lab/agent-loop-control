@@ -120,6 +120,10 @@
         "success": {
           "type": "boolean"
         },
+        "error": {
+          "type": "string",
+          "description": "Failure message captured from a PostToolUseFailure hook."
+        },
         "duration_ms": {
           "type": "integer",
           "minimum": 0

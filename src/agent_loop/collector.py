@@ -102,6 +102,32 @@ def _classify_event(policy: dict, event: dict) -> dict[str, Any]:
     return min(candidates, key=lambda result: _DECISION_PRECEDENCE.get(result["decision"], 1))
 
 
+def _extract_tool_data(hook_data: dict) -> dict[str, Any]:
+    """Extract tool name and input fields shared by tool and approval events."""
+    tool_data: dict[str, Any] = {}
+    tool_name = (
+        hook_data.get("tool_name")
+        or hook_data.get("toolName")
+        or hook_data.get("tool", {}).get("name")
+    )
+    if tool_name:
+        tool_data["name"] = tool_name
+
+    tool_input = hook_data.get("tool_input") or hook_data.get("toolInput")
+    if tool_input:
+        if isinstance(tool_input, dict):
+            tool_data["input_full"] = tool_input
+            cmd = _stringify_command(tool_input.get("command"))
+            if cmd:
+                tool_data["command"] = cmd
+                tool_data["input_summary"] = cmd[:200]
+            else:
+                tool_data["input_summary"] = json.dumps(tool_input, ensure_ascii=False)[:200]
+        else:
+            tool_data["input_summary"] = str(tool_input)[:200]
+    return tool_data
+
+
 def _normalize_hook(hook_data: dict) -> dict[str, Any] | None:
     """Normalize a Claude Code hook payload to a ledger event dict (without hashes)."""
     hook_type = hook_data.get("hook_type") or hook_data.get("hookType") or hook_data.get("type")
@@ -118,27 +144,7 @@ def _normalize_hook(hook_data: dict) -> dict[str, Any] | None:
         cwd = normalize_path(cwd)
 
     if event_type in ("tool.pre", "tool.post", "tool.error"):
-        tool_data: dict[str, Any] = {}
-        tool_name = (
-            hook_data.get("tool_name")
-            or hook_data.get("toolName")
-            or hook_data.get("tool", {}).get("name")
-        )
-        if tool_name:
-            tool_data["name"] = tool_name
-
-        tool_input = hook_data.get("tool_input") or hook_data.get("toolInput")
-        if tool_input:
-            if isinstance(tool_input, dict):
-                tool_data["input_full"] = tool_input
-                cmd = _stringify_command(tool_input.get("command"))
-                if cmd:
-                    tool_data["command"] = cmd
-                    tool_data["input_summary"] = cmd[:200]
-                else:
-                    tool_data["input_summary"] = json.dumps(tool_input, ensure_ascii=False)[:200]
-            else:
-                tool_data["input_summary"] = str(tool_input)[:200]
+        tool_data = _extract_tool_data(hook_data)
 
         if event_type == "tool.post":
             tool_data["success"] = True
@@ -147,6 +153,9 @@ def _normalize_hook(hook_data: dict) -> dict[str, Any] | None:
                 tool_data["exit_code"] = exit_code
         elif event_type == "tool.error":
             tool_data["success"] = False
+            error_message = hook_data.get("error") or hook_data.get("errorMessage")
+            if error_message:
+                tool_data["error"] = str(error_message)
 
         if tool_data:
             extra["tool"] = tool_data
@@ -156,13 +165,22 @@ def _normalize_hook(hook_data: dict) -> dict[str, Any] | None:
         if prompt:
             extra["prompt"] = prompt
 
-    elif event_type == "approval.requested":
-        extra["approval"] = {"status": "requested", "reason": hook_data.get("reason", "")}
-    elif event_type == "approval.resolved":
-        extra["approval"] = {
-            "status": "denied",
-            "reason": hook_data.get("reason", ""),
+    elif event_type in ("approval.requested", "approval.resolved"):
+        approval: dict[str, Any] = {
+            "status": "requested" if event_type == "approval.requested" else "denied",
         }
+        reason = hook_data.get("reason")
+        if reason:
+            approval["reason"] = reason
+        if hook_data.get("retry") is True:
+            approval["retry"] = True
+        extra["approval"] = approval
+
+        # PermissionRequest/PermissionDenied payloads carry no reason text, so
+        # record the underlying tool as the actionable context for the event.
+        tool_data = _extract_tool_data(hook_data)
+        if tool_data:
+            extra["tool"] = tool_data
 
     if event_type is None:
         event_type = "blind_spot.declared"
