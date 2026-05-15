@@ -50,6 +50,28 @@ def test_function_call_normalizes_to_tool_pre(tmp_path):
     assert events[0]["tool"]["command"] == "ls -la"
 
 
+def test_function_call_with_json_string_arguments_normalizes_command(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "git status", "yield_time_ms": 1000}),
+            }
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    import_codex_session(session, ledger_path=ledger)
+
+    events = [json.loads(l) for l in ledger.read_text().splitlines()]
+    assert events[0]["event_type"] == "tool.pre"
+    assert events[0]["tool"]["name"] == "exec_command"
+    assert events[0]["tool"]["command"] == "git status"
+
+
 def test_function_call_output_normalizes_to_tool_post(tmp_path):
     session = tmp_path / "session.jsonl"
     _write_session(session, [
@@ -92,6 +114,202 @@ def test_assistant_record_is_imported(tmp_path):
     events = [json.loads(l) for l in ledger.read_text().splitlines()]
     assert events[0]["event_type"] == "recommendation.created"
     assert events[0]["message"] == "Use a safer command."
+
+
+def test_codex_desktop_payload_wrapper_imports_tool_events(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    head = _init_git_repo(repo)
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "sess-1",
+                    "cwd": str(repo),
+                    "base_instructions": "do not persist this",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "exec_command",
+                    "call_id": "call-1",
+                    "arguments": json.dumps({"cmd": "git status", "yield_time_ms": 1000}),
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call-1",
+                    "output": "On branch main",
+                },
+            },
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger, agent="codex-desktop")
+
+    assert count == 2
+    events = [json.loads(l) for l in ledger.read_text().splitlines()]
+    assert [e["event_type"] for e in events] == ["tool.pre", "tool.post"]
+    assert events[0]["session"]["session_id"] == "sess-1"
+    assert events[0]["session"]["cwd"] == str(repo)
+    assert events[0]["tool"] == {
+        "name": "exec_command",
+        "call_id": "call-1",
+        "command": "git status",
+        "input_summary": "git status",
+    }
+    assert events[0]["repo"] == {
+        "root": str(repo),
+        "remote": "github.com/acme/imported",
+        "branch": "main",
+        "commit": head,
+        "dirty": False,
+    }
+    assert events[1]["tool"] == {
+        "name": "exec_command",
+        "call_id": "call-1",
+        "command": "git status",
+        "success": True,
+    }
+
+
+def test_codex_desktop_payload_wrapper_imports_messages(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Please inspect this."}],
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "I found one issue."}],
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "internal instructions"}],
+                },
+            },
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger)
+
+    assert count == 2
+    events = [json.loads(l) for l in ledger.read_text().splitlines()]
+    assert events[0]["event_type"] == "prompt.submitted"
+    assert events[0]["prompt"] == "Please inspect this."
+    assert events[1]["event_type"] == "recommendation.created"
+    assert events[1]["message"] == "I found one issue."
+
+
+def test_codex_desktop_custom_tool_output_uses_metadata(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "apply_patch",
+                    "call_id": "patch-1",
+                    "input": "*** Begin Patch\n*** End Patch",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "patch-1",
+                    "output": json.dumps({"output": "Success", "metadata": {"exit_code": 0}}),
+                },
+            },
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    import_codex_session(session, ledger_path=ledger)
+
+    events = [json.loads(l) for l in ledger.read_text().splitlines()]
+    assert [e["event_type"] for e in events] == ["tool.pre", "tool.post"]
+    assert events[1]["tool"] == {
+        "name": "apply_patch",
+        "call_id": "patch-1",
+        "exit_code": 0,
+        "success": True,
+    }
+
+
+def test_codex_desktop_telemetry_records_are_skipped(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {"type": "event_msg", "payload": {"type": "token_count", "info": {}}},
+            {"type": "response_item", "payload": {"type": "reasoning", "summary": []}},
+            {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}},
+            {"type": "event_msg", "payload": {"type": "context_compacted"}},
+            {"type": "compacted", "message": "summary"},
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger)
+
+    assert count == 0
+    assert not ledger.exists()
+
+
+def test_codex_desktop_mcp_tool_end_imports_post_event(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "mcp_tool_call_end",
+                    "call_id": "mcp-1",
+                    "invocation": {"server": "github", "tool": "fetch_issue", "arguments": {}},
+                    "result": {"Ok": {}},
+                },
+            }
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger)
+
+    assert count == 1
+    events = [json.loads(l) for l in ledger.read_text().splitlines()]
+    assert events[0]["event_type"] == "tool.post"
+    assert events[0]["tool"] == {
+        "name": "github.fetch_issue",
+        "call_id": "mcp-1",
+        "success": True,
+    }
 
 
 def test_malformed_jsonl_emits_blind_spot(tmp_path):
