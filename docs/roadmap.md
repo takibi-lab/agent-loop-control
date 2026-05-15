@@ -33,6 +33,8 @@
 - [x] Normalize permission events.
 - [ ] Add installer for `.claude/settings.json`. （サンプルのみ。インストーラは未実装）
 - [x] Add safe sample config.
+- [x] Import Claude Code session transcripts (tool_use / tool_result blocks).
+- [x] Import sub-agent transcripts under `subagents/` and attribute them.
 
 ## Phase 4: Codex CLI Collector
 
@@ -40,6 +42,7 @@
 - [x] Detect tool calls and command outputs where possible.
 - [x] Normalize into ledger events.
 - [x] Add blind spot report.
+- [x] Auto-detect Codex vs Claude Code transcript format on import.
 - [ ] Add optional Codex hooks support.
 
 ## Phase 5: Developer CLI

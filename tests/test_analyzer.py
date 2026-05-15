@@ -98,7 +98,8 @@ def test_no_repeated_failures_section_when_failures_are_unique(tmp_path):
     report = analyze_approvals(ledger)
 
     assert "REPEATED FAILURE ANALYSIS:" in report
-    assert "No repeated failures detected." in report
+    assert "Total failed tool actions:   1" in report
+    assert "No action failed two or more times." in report
 
 
 def test_empty_ledger_returns_no_matching_events(tmp_path):
