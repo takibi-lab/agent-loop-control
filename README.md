@@ -35,17 +35,163 @@ policy-defined autonomy + local audit evidence + improvement loop
 Intent -> Plan -> Risk Classify -> Execute -> Verify -> Audit -> Review -> Optimize
 ```
 
-Low-risk actions run automatically. High-risk actions ask for human review. Denied actions are blocked. Every decision and result is recorded locally.
+Low-risk actions can be allowed by policy. High-risk actions can be routed to human
+review. Denied actions are recorded as policy denials for the surrounding agent
+workflow to enforce. Every captured decision and result is recorded locally.
 
 ## Initial MVP
 
 - `agent-policy.yaml` for allow / ask / deny rules.
 - Claude Code hook collector.
 - Codex CLI session JSONL importer.
-- Hash-chained local ledger.
+- Single hash-chained local ledger with repository context on each event.
 - Git diff snapshotting.
 - Timeline and provenance views.
 - Analyzer for approval fatigue, repeated failures, risky actions, and Skill improvement candidates.
+
+## Installation
+
+The project is a Python CLI package. Python 3.11 or newer is required.
+
+For local development or first-time evaluation, clone the repository and run the CLI
+through `uv`:
+
+```bash
+git clone https://github.com/takibi-lab/agent-loop-control.git
+cd agent-loop-control
+uv sync
+uv run agent-loop --help
+```
+
+To install the `agent-loop` command on your PATH from a local checkout:
+
+```bash
+uv tool install .
+agent-loop --version
+```
+
+To install directly from GitHub:
+
+```bash
+uv tool install git+https://github.com/takibi-lab/agent-loop-control.git
+agent-loop --version
+```
+
+If you do not use `uv`, install with any standard Python package tool that supports
+`pyproject.toml`, for example:
+
+```bash
+python -m pip install .
+```
+
+## Quick Start
+
+Create a local config directory, copy the sample policy, and validate it:
+
+```bash
+mkdir -p ~/.agent-loop
+cp examples/agent-policy.yaml ~/.agent-loop/agent-policy.yaml
+agent-loop policy check ~/.agent-loop/agent-policy.yaml
+```
+
+If you are working from a checkout without installing the command, replace
+`agent-loop` with `uv run agent-loop` in the examples below.
+
+Capture a sample Claude Code hook event into the global local ledger:
+
+```bash
+agent-loop hook collect \
+  --ledger ~/.agent-loop/ledger.jsonl \
+  --policy-file ~/.agent-loop/agent-policy.yaml \
+  < examples/collector/claude-hook-input.json
+```
+
+Verify and inspect the ledger:
+
+```bash
+agent-loop verify ~/.agent-loop/ledger.jsonl
+agent-loop timeline ~/.agent-loop/ledger.jsonl
+agent-loop search ~/.agent-loop/ledger.jsonl --decision allow
+agent-loop search ~/.agent-loop/ledger.jsonl --file-path .env
+agent-loop analyze ~/.agent-loop/ledger.jsonl
+```
+
+`verify` always validates the full JSONL hash chain. Repository options on read
+commands are filters for display and reporting; they do not create or validate a
+separate per-repository chain.
+
+Filter views to one repository while keeping the single global ledger:
+
+```bash
+agent-loop timeline ~/.agent-loop/ledger.jsonl --repo .
+agent-loop timeline ~/.agent-loop/ledger.jsonl --repo-root /path/to/repo
+agent-loop search ~/.agent-loop/ledger.jsonl --repo . --decision deny
+agent-loop search ~/.agent-loop/ledger.jsonl --repo-root /path/to/repo --file-path pyproject.toml
+agent-loop analyze ~/.agent-loop/ledger.jsonl --repo .
+agent-loop analyze ~/.agent-loop/ledger.jsonl --group-by repo
+```
+
+Capture the current Git repository state and staged/unstaged diff hash:
+
+```bash
+agent-loop snapshot --ledger ~/.agent-loop/ledger.jsonl --repo .
+```
+
+Import a Codex CLI session JSONL file:
+
+```bash
+agent-loop import ~/.codex/sessions/<session-file>.jsonl \
+  --ledger ~/.agent-loop/ledger.jsonl \
+  --agent codex-cli
+```
+
+## Claude Code Hooks
+
+The sample Claude Code hook configuration is in
+[`examples/collector/claude-settings.json`](examples/collector/claude-settings.json).
+Merge its `hooks` object into your Claude Code settings file and make sure the
+`agent-loop` command is available on the PATH used by Claude Code.
+
+The sample hook commands write to `~/.agent-loop/ledger.jsonl` and classify
+pre-tool events with `~/.agent-loop/agent-policy.yaml`:
+
+```json
+{
+  "type": "command",
+  "command": "agent-loop hook collect --ledger ~/.agent-loop/ledger.jsonl --policy-file ~/.agent-loop/agent-policy.yaml"
+}
+```
+
+Keep the ledger path global. A project may keep its policy in the repository if
+that is useful, but writing ledger files under the project directory is discouraged:
+it splits the tamper-evident chain and increases the chance of accidentally adding
+local audit data to Git. Repository separation is handled by `session.cwd` and the
+optional `repo` fields stored on each event, then by read-time filters such as
+`--repo .` and `--repo-root /path/to/repo`.
+
+The MVP hook collector records policy classifications and redacted hook inputs in
+the ledger. It does not replace Claude Code's own approval system or provider-side
+controls.
+
+## CLI Reference
+
+Common commands:
+
+```bash
+agent-loop policy check [agent-policy.yaml]
+agent-loop policy classify --tool Bash --command "git status" --policy-file agent-policy.yaml
+agent-loop hook collect --ledger agent-ledger.jsonl --policy-file agent-policy.yaml
+agent-loop import <codex-session.jsonl> --ledger agent-ledger.jsonl --agent codex-cli
+agent-loop snapshot --ledger agent-ledger.jsonl --repo .
+agent-loop verify agent-ledger.jsonl
+agent-loop timeline agent-ledger.jsonl --limit 50 --repo .
+agent-loop search agent-ledger.jsonl --type tool.pre --decision deny --repo-root /path/to/repo
+agent-loop analyze agent-ledger.jsonl --repo .
+agent-loop analyze agent-ledger.jsonl --group-by repo
+```
+
+Prefer `~/.agent-loop/ledger.jsonl` for real use. Short local names such as
+`agent-ledger.jsonl` are convenient for examples, tests, and disposable demos.
 
 ## Policy Semantics
 
@@ -58,6 +204,15 @@ needs a different rationale or risk label for each condition.
 
 - Ledger writes use POSIX `fcntl` file locking. Windows support is best-effort in the
   MVP and does not provide the same locking guarantee.
+- The canonical deployment model is one local JSONL ledger, normally
+  `~/.agent-loop/ledger.jsonl`. Per-repository ledger files are supported only as
+  ad hoc inputs and weaken cross-repository tamper evidence.
+- Repository filters on `timeline`, `search`, and `analyze` narrow the events shown
+  after loading the ledger. They are not a substitute for `agent-loop verify`, which
+  checks the complete hash chain.
+- `repo.root` and `session.cwd` may contain absolute local paths. If you enable path
+  anonymization redaction for shared reports, prefer `repo.remote` filters because
+  exact root-path filtering becomes less precise.
 - Hook bypasses are outside the evidence boundary. Actions not captured by a collector
   are not present in the ledger.
 - Provider-side logs and hidden model reasoning are not captured.

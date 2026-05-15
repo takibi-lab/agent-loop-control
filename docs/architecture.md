@@ -29,7 +29,7 @@ Analyzers
         |
         v
 UI and Reports
-  timeline / search / recommendations / export
+  timeline / search / analyze / recommendations / export
 ```
 
 ## Components
@@ -74,17 +74,48 @@ The engine should be deterministic and explainable. Every decision must include 
 
 ### Ledger
 
-The ledger is append-only JSONL. Each event includes:
+The ledger is a single append-only JSONL file, normally
+`~/.agent-loop/ledger.jsonl`. Agent Loop Control keeps one physical hash chain
+across repositories and separates repositories logically with context fields on
+each event. This preserves cross-repository tamper evidence while still allowing
+repo-scoped views.
+
+Each event includes:
 
 - Event identity.
 - Source and session.
+- Session working directory, when known.
+- Repository context, when resolved.
 - Tool/action information.
 - Policy decision where relevant.
 - Diff snapshot references where relevant.
 - `prev_hash`.
 - `hash`.
 
-The hash chain makes edits detectable.
+The hash chain makes edits detectable. `agent-loop verify` validates the complete
+chain for the ledger file; repository filters are applied only by read-side views
+and reports after the chain has been read.
+
+Repository context is resolved from the event working directory where possible:
+
+- `session.cwd` records the collector or imported session working directory.
+- `repo.root` records the normalized Git worktree root.
+- `repo.remote` records the origin remote when available.
+- `repo.branch` records the current branch when available.
+
+For non-Git directories, `repo` may be absent and `session.cwd` remains the
+fallback identity. Project-local ledger files are not the recommended operating
+model because they split the chain and can be accidentally committed.
+
+Read-side repository filters:
+
+```bash
+agent-loop timeline ~/.agent-loop/ledger.jsonl --repo .
+agent-loop timeline ~/.agent-loop/ledger.jsonl --repo-root /path/to/repo
+agent-loop search ~/.agent-loop/ledger.jsonl --repo . --decision allow
+agent-loop analyze ~/.agent-loop/ledger.jsonl --repo .
+agent-loop analyze ~/.agent-loop/ledger.jsonl --group-by repo
+```
 
 ### Diff Snapshotter
 
@@ -130,4 +161,3 @@ Mitigations:
 - Hash-chain ledger.
 - Policy-as-code.
 - Explicit blind spot reporting.
-

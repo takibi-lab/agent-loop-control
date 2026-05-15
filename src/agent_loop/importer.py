@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_loop.ledger import append_event, build_event
+from agent_loop.repo_context import normalize_path, resolve_repo_context
 
 _BLIND_SPOTS = [
     "Hidden model reasoning is not captured.",
@@ -17,11 +18,31 @@ _BLIND_SPOTS = [
 ]
 
 
-def _normalize_codex_record(record: dict, agent: str) -> dict[str, Any] | None:
+def _record_cwd(record: dict, fallback_cwd: str | Path | None) -> str | None:
+    cwd = record.get("cwd") or record.get("working_dir") or record.get("workingDirectory")
+    if cwd is None:
+        cwd = fallback_cwd
+    return normalize_path(cwd) if cwd else None
+
+
+def _repo_extra(cwd: str | None) -> dict[str, Any]:
+    if not cwd:
+        return {}
+    repo = resolve_repo_context(cwd)
+    return {"repo": repo} if repo is not None else {}
+
+
+def _normalize_codex_record(
+    record: dict,
+    agent: str,
+    *,
+    fallback_cwd: str | Path | None = None,
+) -> dict[str, Any] | None:
     """Normalize one Codex session record to a ledger event dict."""
     rtype = record.get("type") or record.get("role")
 
     session_id = record.get("session_id") or record.get("id")
+    cwd = _record_cwd(record, fallback_cwd)
 
     if rtype == "function_call" or (rtype == "tool" and record.get("call")):
         tool_data: dict[str, Any] = {}
@@ -43,7 +64,8 @@ def _normalize_codex_record(record: dict, agent: str) -> dict[str, Any] | None:
             "tool.pre",
             agent,
             session_id=session_id,
-            extra={"tool": tool_data},
+            cwd=cwd,
+            extra={"tool": tool_data, **_repo_extra(cwd)},
         )
 
     if rtype == "function_call_output" or rtype == "tool_result":
@@ -63,13 +85,15 @@ def _normalize_codex_record(record: dict, agent: str) -> dict[str, Any] | None:
                 "tool.error",
                 agent,
                 session_id=session_id,
-                extra={"tool": tool_data},
+                cwd=cwd,
+                extra={"tool": tool_data, **_repo_extra(cwd)},
             )
         return build_event(
             "tool.post",
             agent,
             session_id=session_id,
-            extra={"tool": tool_data},
+            cwd=cwd,
+            extra={"tool": tool_data, **_repo_extra(cwd)},
         )
 
     if rtype in ("user", "assistant", "system"):
@@ -82,14 +106,16 @@ def _normalize_codex_record(record: dict, agent: str) -> dict[str, Any] | None:
                 "prompt.submitted",
                 agent,
                 session_id=session_id,
-                extra={"prompt": str(content)[:500]},
+                cwd=cwd,
+                extra={"prompt": str(content)[:500], **_repo_extra(cwd)},
             )
         if rtype == "assistant" and content:
             return build_event(
                 "recommendation.created",
                 agent,
                 session_id=session_id,
-                extra={"message": str(content)[:500]},
+                cwd=cwd,
+                extra={"message": str(content)[:500], **_repo_extra(cwd)},
             )
         return None
 
@@ -97,11 +123,13 @@ def _normalize_codex_record(record: dict, agent: str) -> dict[str, Any] | None:
         "blind_spot.declared",
         agent,
         session_id=session_id,
+        cwd=cwd,
         extra={
             "blind_spots": [
                 f"Unsupported Codex record type: {rtype!r}",
                 *_BLIND_SPOTS,
-            ]
+            ],
+            **_repo_extra(cwd),
         },
     )
 
@@ -111,6 +139,7 @@ def import_codex_session(
     *,
     ledger_path: str | Path = "agent-ledger.jsonl",
     agent: str = "codex-cli",
+    cwd: str | Path | None = None,
 ) -> int:
     """Import a Codex session JSONL file into the ledger. Returns count of appended events."""
     p = Path(source_path)
@@ -127,13 +156,17 @@ def import_codex_session(
                 event = build_event(
                     "blind_spot.declared",
                     agent,
-                    extra={"blind_spots": [f"Line {lineno}: malformed JSON: {exc}", *_BLIND_SPOTS]},
+                    cwd=normalize_path(cwd) if cwd else None,
+                    extra={
+                        "blind_spots": [f"Line {lineno}: malformed JSON: {exc}", *_BLIND_SPOTS],
+                        **_repo_extra(normalize_path(cwd) if cwd else None),
+                    },
                 )
                 append_event(ledger_path, event)
                 count += 1
                 continue
 
-            event = _normalize_codex_record(record, agent)
+            event = _normalize_codex_record(record, agent, fallback_cwd=cwd)
             if event is not None:
                 append_event(ledger_path, event)
                 count += 1

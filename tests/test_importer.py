@@ -1,6 +1,7 @@
 """Tests for Codex CLI session JSONL importer."""
 
 import json
+import subprocess
 from pathlib import Path
 
 from agent_loop.importer import import_codex_session
@@ -11,6 +12,28 @@ def _write_session(path: Path, records: list[dict]) -> None:
     with path.open("w") as f:
         for r in records:
             f.write(json.dumps(r) + "\n")
+
+
+def _run_git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _init_git_repo(path: Path) -> str:
+    _run_git(path, "init", "-b", "main")
+    _run_git(path, "config", "user.email", "test@test.com")
+    _run_git(path, "config", "user.name", "Test")
+    (path / "readme.md").write_text("hello\n", encoding="utf-8")
+    _run_git(path, "add", "readme.md")
+    _run_git(path, "commit", "-m", "init")
+    _run_git(path, "remote", "add", "origin", "git@github.com:acme/imported.git")
+    return _run_git(path, "rev-parse", "HEAD")
 
 
 def test_function_call_normalizes_to_tool_pre(tmp_path):
@@ -79,6 +102,29 @@ def test_malformed_jsonl_emits_blind_spot(tmp_path):
     assert count == 1
     events = [json.loads(l) for l in ledger.read_text().splitlines()]
     assert events[0]["event_type"] == "blind_spot.declared"
+
+
+def test_import_uses_fallback_cwd_for_repo_context(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    head = _init_git_repo(repo)
+    session = tmp_path / "session.jsonl"
+    _write_session(session, [
+        {"type": "function_call", "name": "bash", "arguments": {"command": "git status"}}
+    ])
+    ledger = tmp_path / "l.jsonl"
+
+    import_codex_session(session, ledger_path=ledger, cwd=repo)
+
+    events = [json.loads(l) for l in ledger.read_text().splitlines()]
+    assert events[0]["session"]["cwd"] == str(repo)
+    assert events[0]["repo"] == {
+        "root": str(repo),
+        "remote": "github.com/acme/imported",
+        "branch": "main",
+        "commit": head,
+        "dirty": False,
+    }
 
 
 def test_ledger_integrity_after_import(tmp_path):

@@ -66,6 +66,9 @@
         "root": {
           "type": "string"
         },
+        "remote": {
+          "type": "string"
+        },
         "branch": {
           "type": "string"
         },
@@ -233,4 +236,3 @@
   },
   "additionalProperties": true
 }
-

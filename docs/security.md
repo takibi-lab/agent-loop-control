@@ -15,7 +15,20 @@ The `.gitignore` excludes:
 - Credential files.
 - Database files and backups.
 - Local AI agent state such as `.claude/`, `.codex/`, `.agent/`, and `.agents/`.
-- Local audit ledgers such as `.agent-ledger/` and `.agent-audit/`.
+- Legacy or scratch local audit directories such as `.agent-ledger/` and
+  `.agent-audit/`.
+
+The recommended ledger location is outside repositories, normally
+`~/.agent-loop/ledger.jsonl`. Keeping one global JSONL ledger preserves a single
+hash chain across repositories and reduces accidental commit risk. Repo-local
+ledger files should be treated as disposable test data or legacy state, not as the
+normal audit record.
+
+## Ledger Verification
+
+`agent-loop verify` validates the full hash chain in the ledger file. Repo filters
+on commands such as `timeline`, `search`, and `analyze` narrow views and reports
+only; they do not verify a smaller per-repository chain.
 
 ## Branch Protection Policy
 
@@ -30,4 +43,3 @@ The intended GitHub rule for `main` is:
 - Force pushes and branch deletion are disabled.
 
 `CODEOWNERS` currently assigns all files to `@takibi-lab`.
-

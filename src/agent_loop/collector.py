@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_loop.ledger import append_event, build_event
+from agent_loop.repo_context import normalize_path, resolve_repo_context
 
 _HOOK_TO_EVENT_TYPE = {
     "UserPromptSubmit": "prompt.submitted",
@@ -110,6 +111,11 @@ def _normalize_hook(hook_data: dict) -> dict[str, Any] | None:
     cwd = hook_data.get("cwd")
 
     extra: dict[str, Any] = {}
+    if cwd:
+        repo = resolve_repo_context(cwd)
+        if repo is not None:
+            extra["repo"] = repo
+        cwd = normalize_path(cwd)
 
     if event_type in ("tool.pre", "tool.post", "tool.error"):
         tool_data: dict[str, Any] = {}
