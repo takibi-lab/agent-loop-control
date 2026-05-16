@@ -41,9 +41,36 @@ _IGNORED_CLAUDE_TYPES = {
     "custom-title",
     "file-history-snapshot",
     "last-prompt",
+    "pr-link",
     "queue-operation",
     "queued-command",
     "summary",
+    "system",
+}
+
+# `attachment` records inject context (skill lists, reminders, file content,
+# tool-list deltas). These subtypes carry no agent decision and are skipped;
+# `hook_permission_decision` is normalized to an approval event, and any
+# unknown subtype is still declared as a blind spot.
+_IGNORED_ATTACHMENT_SUBTYPES = {
+    "agent_listing_delta",
+    "command_permissions",
+    "compact_file_reference",
+    "date_change",
+    "deferred_tools_delta",
+    "edited_text_file",
+    "file",
+    "goal_status",
+    "hook_success",
+    "invoked_skills",
+    "mcp_instructions_delta",
+    "plan_file_reference",
+    "plan_mode",
+    "plan_mode_exit",
+    "queued_command",
+    "skill_listing",
+    "task_reminder",
+    "todo_reminder",
 }
 
 # Tools whose input names a file; used to populate the event `files` array.
@@ -63,6 +90,8 @@ class _ClaudeContext:
     repo_cache: dict[str, dict[str, Any] | None] = field(default_factory=dict)
     # tool_use id -> remembered tool metadata, used to label the matching result.
     tool_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Last seen permission mode, so only real transitions become events.
+    last_permission_mode: str | None = None
 
 
 def _repo_extra(cwd: str | None, repo_cache: dict[str, dict[str, Any] | None]) -> dict[str, Any]:
@@ -212,6 +241,87 @@ def _tool_result_event(
     )
 
 
+def _attachment_events(
+    record: dict[str, Any],
+    agent: str,
+    *,
+    session_id: str | None,
+    cwd: str | None,
+    repo_extra: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Normalize an `attachment` record to zero or one ledger event."""
+    attachment = record.get("attachment")
+    subtype = attachment.get("type") if isinstance(attachment, dict) else None
+
+    if subtype == "hook_permission_decision":
+        decision = attachment.get("decision")
+        approval: dict[str, Any] = {
+            "status": "approved" if decision == "allow" else "denied",
+            "reviewer": "claude-code-hook",
+        }
+        request_id = attachment.get("toolUseID")
+        if request_id:
+            approval["request_id"] = str(request_id)
+        return [
+            build_event(
+                "approval.resolved",
+                agent,
+                session_id=session_id,
+                cwd=cwd,
+                extra={"approval": approval, **repo_extra},
+            )
+        ]
+
+    if subtype in _IGNORED_ATTACHMENT_SUBTYPES:
+        return []
+
+    return [
+        build_event(
+            "blind_spot.declared",
+            agent,
+            session_id=session_id,
+            cwd=cwd,
+            extra={
+                "blind_spots": [
+                    f"Unsupported Claude Code attachment subtype: {subtype!r}",
+                    *_BLIND_SPOTS,
+                ],
+                **repo_extra,
+            },
+        )
+    ]
+
+
+def _permission_mode_events(
+    record: dict[str, Any],
+    agent: str,
+    context: _ClaudeContext,
+    *,
+    session_id: str | None,
+    cwd: str | None,
+    repo_extra: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Normalize a `permission-mode` record, emitting only on a real change."""
+    mode = record.get("permissionMode")
+    if not mode or mode == context.last_permission_mode:
+        return []
+
+    previous = context.last_permission_mode
+    context.last_permission_mode = str(mode)
+    policy: dict[str, Any] = {"mode": str(mode)}
+    if previous:
+        policy["previous_mode"] = previous
+    return [
+        build_event(
+            "policy.mode_changed",
+            agent,
+            session_id=session_id,
+            cwd=cwd,
+            extra={"policy": policy, **repo_extra},
+        )
+    ]
+
+
 def _normalize_claude_record(
     record: dict[str, Any],
     agent: str,
@@ -297,9 +407,23 @@ def _normalize_claude_record(
             )
         return _attribute(events, sub_agent)
 
-    # Any other record type (system, attachment, permission-mode, pr-link, ...)
-    # is not yet normalized and is recorded as an explicit blind spot. Pure
-    # bookkeeping types are filtered earlier via _IGNORED_CLAUDE_TYPES.
+    if rtype == "attachment":
+        return _attribute(
+            _attachment_events(record, agent, session_id=session_id, cwd=cwd, repo_extra=repo_extra),
+            sub_agent,
+        )
+
+    if rtype == "permission-mode":
+        return _attribute(
+            _permission_mode_events(
+                record, agent, context, session_id=session_id, cwd=cwd, repo_extra=repo_extra
+            ),
+            sub_agent,
+        )
+
+    # Any remaining record type is not yet normalized and is recorded as an
+    # explicit blind spot. Pure bookkeeping types are filtered earlier via
+    # _IGNORED_CLAUDE_TYPES.
     events.append(
         build_event(
             "blind_spot.declared",

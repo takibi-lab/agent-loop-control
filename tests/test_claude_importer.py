@@ -146,14 +146,96 @@ def test_assistant_text_and_tool_use_emit_both_events(tmp_path):
 
 def test_unsupported_record_emits_blind_spot(tmp_path):
     session = tmp_path / "s.jsonl"
-    _write(session, [{"type": "permission-mode", "permissionMode": "default", "sessionId": "s1"}])
+    _write(session, [{"type": "future-mystery-record", "sessionId": "s1"}])
     ledger = tmp_path / "l.jsonl"
 
     import_claude_session(session, ledger_path=ledger)
 
     events = _events(ledger)
     assert events[0]["event_type"] == "blind_spot.declared"
-    assert "permission-mode" in events[0]["blind_spots"][0]
+    assert "future-mystery-record" in events[0]["blind_spots"][0]
+
+
+def test_attachment_hook_permission_decision_normalizes_to_approval(tmp_path):
+    session = tmp_path / "s.jsonl"
+    _write(
+        session,
+        [
+            {
+                "type": "attachment",
+                "sessionId": "s1",
+                "attachment": {
+                    "type": "hook_permission_decision",
+                    "decision": "allow",
+                    "toolUseID": "tu1",
+                    "hookEvent": "PermissionRequest",
+                },
+            }
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    import_claude_session(session, ledger_path=ledger)
+
+    events = _events(ledger)
+    assert events[0]["event_type"] == "approval.resolved"
+    assert events[0]["approval"]["status"] == "approved"
+    assert events[0]["approval"]["request_id"] == "tu1"
+
+
+def test_attachment_metadata_subtype_and_system_record_are_skipped(tmp_path):
+    session = tmp_path / "s.jsonl"
+    _write(
+        session,
+        [
+            {"type": "attachment", "sessionId": "s1", "attachment": {"type": "skill_listing", "content": "x"}},
+            {"type": "system", "subtype": "turn_duration", "sessionId": "s1"},
+            {"type": "pr-link", "prNumber": 1, "sessionId": "s1"},
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_claude_session(session, ledger_path=ledger)
+
+    assert count == 0
+    assert not ledger.exists()
+
+
+def test_unknown_attachment_subtype_emits_blind_spot(tmp_path):
+    session = tmp_path / "s.jsonl"
+    _write(
+        session,
+        [{"type": "attachment", "sessionId": "s1", "attachment": {"type": "mystery_attachment"}}],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    import_claude_session(session, ledger_path=ledger)
+
+    events = _events(ledger)
+    assert events[0]["event_type"] == "blind_spot.declared"
+    assert "mystery_attachment" in events[0]["blind_spots"][0]
+
+
+def test_permission_mode_change_emits_event_only_on_transition(tmp_path):
+    session = tmp_path / "s.jsonl"
+    _write(
+        session,
+        [
+            {"type": "permission-mode", "permissionMode": "default", "sessionId": "s1"},
+            {"type": "permission-mode", "permissionMode": "default", "sessionId": "s1"},
+            {"type": "permission-mode", "permissionMode": "acceptEdits", "sessionId": "s1"},
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_claude_session(session, ledger_path=ledger)
+
+    assert count == 2
+    events = _events(ledger)
+    assert [e["event_type"] for e in events] == ["policy.mode_changed", "policy.mode_changed"]
+    assert events[0]["policy"]["mode"] == "default"
+    assert events[1]["policy"]["mode"] == "acceptEdits"
+    assert events[1]["policy"]["previous_mode"] == "default"
 
 
 def test_metadata_record_types_are_skipped(tmp_path):
