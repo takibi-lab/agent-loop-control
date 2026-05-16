@@ -66,6 +66,42 @@ def _failure_section(events: list[dict]) -> list[str]:
     return lines
 
 
+def _import_visibility_section(events: list[dict]) -> list[str]:
+    """Build the import-visibility report section as report lines.
+
+    Imported transcripts (Codex / Claude Code) carry `blind_spot.declared` events
+    for record types the importer cannot normalize, and `recommendation.created`
+    events for assistant guidance. This section surfaces both so importer coverage
+    gaps are visible instead of silently dropped. It is omitted when the ledger
+    contains no imported transcript events.
+    """
+    blind_spots = [e for e in events if e.get("event_type") == "blind_spot.declared"]
+    recommendations = [e for e in events if e.get("event_type") == "recommendation.created"]
+    if not blind_spots and not recommendations:
+        return []
+
+    reason_counter: Counter = Counter()
+    for e in blind_spots:
+        spots = e.get("blind_spots")
+        if isinstance(spots, list) and spots:
+            reason_counter[str(spots[0])] += 1
+    unsupported = [
+        (reason, count)
+        for reason, count in reason_counter.most_common()
+        if reason.startswith("Unsupported")
+    ]
+
+    lines = ["IMPORT VISIBILITY (imported transcripts):"]
+    lines.append(f"  Blind spot events:           {len(blind_spots)}")
+    lines.append(f"  Recommendations captured:    {len(recommendations)}")
+    if unsupported:
+        lines.append("  Top unsupported record types (extend the importer to capture these):")
+        for reason, count in unsupported[:5]:
+            lines.append(f"  {count:4d}x  {reason}")
+    lines.append("")
+    return lines
+
+
 def _repo_breakdown(events: list[dict]) -> str:
     if not events:
         return "No events in ledger. Nothing to analyze."
@@ -184,6 +220,7 @@ def analyze_approvals(
         lines.append("")
 
     lines.extend(_failure_section(events))
+    lines.extend(_import_visibility_section(events))
 
     lines.append("BLIND SPOTS AND ASSUMPTIONS:")
     lines.append("  - Only captured hook events are analyzed; bypassed actions are invisible.")

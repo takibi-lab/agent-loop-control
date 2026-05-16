@@ -48,6 +48,26 @@ def _append_tool_error(ledger, *, command: str) -> dict:
     )
 
 
+def _append_blind_spot(ledger, *, reason: str) -> dict:
+    """Append a blind_spot.declared event as the importer would."""
+    return append_event(
+        ledger,
+        build_event(
+            "blind_spot.declared",
+            "codex-cli",
+            extra={"blind_spots": [reason, "Hidden model reasoning is not captured."]},
+        ),
+    )
+
+
+def _append_recommendation(ledger, *, message: str) -> dict:
+    """Append a recommendation.created event as the importer would."""
+    return append_event(
+        ledger,
+        build_event("recommendation.created", "codex-cli", extra={"message": message}),
+    )
+
+
 def test_decision_counts_are_consistent_with_total(tmp_path):
     """allow/ask/deny counts must sum within the policy-decision total."""
     ledger = tmp_path / "ledger.jsonl"
@@ -100,6 +120,32 @@ def test_no_repeated_failures_section_when_failures_are_unique(tmp_path):
     assert "REPEATED FAILURE ANALYSIS:" in report
     assert "Total failed tool actions:   1" in report
     assert "No action failed two or more times." in report
+
+
+def test_import_visibility_reports_blind_spots_and_recommendations(tmp_path):
+    """Imported blind spots and recommendations surface in their own section."""
+    ledger = tmp_path / "ledger.jsonl"
+    _append_blind_spot(ledger, reason="Unsupported Codex record type: 'exec_command_end'")
+    _append_blind_spot(ledger, reason="Unsupported Codex record type: 'exec_command_end'")
+    _append_blind_spot(ledger, reason="Unsupported Claude Code record type: 'attachment'")
+    _append_recommendation(ledger, message="Consider adding a regression test.")
+
+    report = analyze_approvals(ledger)
+
+    assert "IMPORT VISIBILITY (imported transcripts):" in report
+    assert "Blind spot events:           3" in report
+    assert "Recommendations captured:    1" in report
+    assert "2x  Unsupported Codex record type: 'exec_command_end'" in report
+
+
+def test_import_visibility_section_absent_without_imported_events(tmp_path):
+    """A ledger of only hook events has no import-visibility section."""
+    ledger = tmp_path / "ledger.jsonl"
+    _append_tool_pre(ledger, command="git status", decision="allow")
+
+    report = analyze_approvals(ledger)
+
+    assert "IMPORT VISIBILITY" not in report
 
 
 def test_empty_ledger_returns_no_matching_events(tmp_path):

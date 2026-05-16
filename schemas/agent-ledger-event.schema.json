@@ -89,6 +89,7 @@
         "prompt.submitted",
         "plan.proposed",
         "policy.decision",
+        "policy.mode_changed",
         "approval.requested",
         "approval.resolved",
         "tool.pre",

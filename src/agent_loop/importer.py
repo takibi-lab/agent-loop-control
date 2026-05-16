@@ -7,10 +7,12 @@ Emits blind_spot.declared events for unsupported or incomplete records.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent_loop.collector import apply_policy_to_event
 from agent_loop.ledger import append_event, build_event
 from agent_loop.repo_context import normalize_path, resolve_repo_context
 
@@ -28,7 +30,9 @@ _IGNORED_CODEX_TYPES = {
     "reasoning",
     "task_complete",
     "task_started",
+    "thread_name_updated",
     "token_count",
+    "turn_aborted",
 }
 _DEFAULT_TOOL_NAMES = {
     "image_generation_call": "image_generation",
@@ -36,6 +40,33 @@ _DEFAULT_TOOL_NAMES = {
     "patch_apply_end": "apply_patch",
     "web_search_call": "web_search",
     "web_search_end": "web_search",
+    "exec_command_end": "exec_command",
+    "view_image_tool_call": "view_image",
+}
+
+# Codex record types that represent the model invoking a tool.
+_TOOL_CALL_TYPES = {
+    "function_call",
+    "custom_tool_call",
+    "image_generation_call",
+    "web_search_call",
+    "view_image_tool_call",
+}
+
+# Codex emits an `event_msg`/`exec_command_end` payload with the real exit code
+# for every shell call, in addition to the model-facing `function_call_output`.
+# Both share a `call_id`; `_scan_exec_end_call_ids` collects every
+# `exec_command_end` call_id up front so the paired `function_call_output` is
+# always dropped in favor of the richer record, regardless of transcript order.
+_TOOL_OUTPUT_TYPES = {
+    "function_call_output",
+    "custom_tool_call_output",
+    "exec_command_end",
+    "image_generation_end",
+    "mcp_tool_call_end",
+    "patch_apply_end",
+    "tool_result",
+    "web_search_end",
 }
 
 
@@ -45,6 +76,9 @@ class _ImportContext:
     cwd: str | None = None
     repo_cache: dict[str, dict[str, Any] | None] = field(default_factory=dict)
     tool_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
+    output_call_ids: set[str] = field(default_factory=set)
+    # call_ids that have an exec_command_end record anywhere in the transcript.
+    exec_end_call_ids: set[str] = field(default_factory=set)
 
 
 def _record_cwd(record: dict, fallback_cwd: str | Path | None) -> str | None:
@@ -211,6 +245,8 @@ def _normalize_codex_record(
     fallback_session_id: str | None = None,
     repo_cache: dict[str, dict[str, Any] | None] | None = None,
     tool_calls: dict[str, dict[str, Any]] | None = None,
+    output_call_ids: set[str] | None = None,
+    exec_end_call_ids: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Normalize one Codex session record to a ledger event dict."""
     record = _unwrap_codex_record(record)
@@ -218,6 +254,8 @@ def _normalize_codex_record(
     role = record.get("role")
     wrapper_type = record.get("_codex_wrapper_type")
     tool_calls = tool_calls if tool_calls is not None else {}
+    output_call_ids = output_call_ids if output_call_ids is not None else set()
+    exec_end_call_ids = exec_end_call_ids if exec_end_call_ids is not None else set()
 
     if wrapper_type in {"session_meta", "turn_context"} or rtype in _IGNORED_CODEX_TYPES:
         return None
@@ -225,9 +263,7 @@ def _normalize_codex_record(
     session_id = record.get("session_id") or fallback_session_id
     cwd = _record_cwd(record, fallback_cwd)
 
-    if rtype in {"function_call", "custom_tool_call", "image_generation_call", "web_search_call"} or (
-        rtype == "tool" and record.get("call")
-    ):
+    if rtype in _TOOL_CALL_TYPES or (rtype == "tool" and record.get("call")):
         if rtype == "tool" and record.get("call"):
             record = {**record, **record.get("call", {})}
         tool_data, tool_cwd = _tool_call_data(record)
@@ -245,15 +281,22 @@ def _normalize_codex_record(
             extra={"tool": tool_data, **_repo_extra(cwd, repo_cache)},
         )
 
-    if rtype in {
-        "function_call_output",
-        "custom_tool_call_output",
-        "image_generation_end",
-        "mcp_tool_call_end",
-        "patch_apply_end",
-        "tool_result",
-        "web_search_end",
-    }:
+    if rtype in _TOOL_OUTPUT_TYPES:
+        call_id = record.get("call_id") or record.get("id")
+        cid = str(call_id) if call_id is not None else None
+        # Codex emits both `exec_command_end` (real exit code) and the
+        # model-facing `function_call_output` for one shell `call_id`. Drop the
+        # `function_call_output` whenever an `exec_command_end` exists for the
+        # same call_id, regardless of which record appears first, so the richer
+        # record always wins and the shell call is not double-counted.
+        if rtype == "function_call_output" and cid is not None and cid in exec_end_call_ids:
+            return None
+        # Guard against the same output record repeating for one call_id.
+        if cid is not None:
+            if cid in output_call_ids:
+                return None
+            output_call_ids.add(cid)
+
         tool_data = _tool_output_data(record, tool_calls)
 
         if tool_data.get("success") is False:
@@ -298,6 +341,37 @@ def _normalize_codex_record(
             )
         return None
 
+    if rtype == "item_completed":
+        # Newer Codex transcripts wrap completed thread items here. A Plan item
+        # carries the agent's planning text; map it to a recommendation. Other
+        # item subtypes are declared as blind spots that name the subtype.
+        item = record.get("item")
+        item_type = item.get("type") if isinstance(item, dict) else None
+        if item_type == "Plan":
+            text = item.get("text") if isinstance(item, dict) else None
+            if not text:
+                return None
+            return build_event(
+                "recommendation.created",
+                agent,
+                session_id=session_id,
+                cwd=cwd,
+                extra={"message": str(text)[:500], **_repo_extra(cwd, repo_cache)},
+            )
+        return build_event(
+            "blind_spot.declared",
+            agent,
+            session_id=session_id,
+            cwd=cwd,
+            extra={
+                "blind_spots": [
+                    f"Unsupported Codex item_completed item type: {item_type!r}",
+                    *_BLIND_SPOTS,
+                ],
+                **_repo_extra(cwd, repo_cache),
+            },
+        )
+
     return build_event(
         "blind_spot.declared",
         agent,
@@ -320,11 +394,13 @@ def import_session(
     agent: str | None = None,
     cwd: str | Path | None = None,
     session_format: str = "auto",
+    policy_path: str | Path | None = None,
 ) -> int:
     """Import an agent session transcript, auto-detecting Codex vs Claude Code.
 
-    `session_format` may be "auto", "codex", or "claude-code". Returns the count
-    of appended events.
+    `session_format` may be "auto", "codex", or "claude-code". When `policy_path`
+    is given, imported `tool.pre` events are classified against that policy.
+    Returns the count of appended events.
     """
     from agent_loop.claude_importer import import_claude_session, is_claude_session
 
@@ -337,13 +413,42 @@ def import_session(
             ledger_path=ledger_path,
             agent=agent or "claude-code",
             cwd=cwd,
+            policy_path=policy_path,
         )
     return import_codex_session(
         source_path,
         ledger_path=ledger_path,
         agent=agent or "codex-cli",
         cwd=cwd,
+        policy_path=policy_path,
     )
+
+
+def _scan_exec_end_call_ids(lines: Iterable[str]) -> set[str]:
+    """Collect every call_id that has an `exec_command_end` record.
+
+    Codex emits both `exec_command_end` and `function_call_output` for one
+    shell `call_id`. Pre-scanning the whole transcript lets the importer always
+    prefer the richer `exec_command_end`, no matter which record comes first.
+    """
+    call_ids: set[str] = set()
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        record = _unwrap_codex_record(record)
+        if record.get("type") != "exec_command_end":
+            continue
+        call_id = record.get("call_id") or record.get("id")
+        if call_id is not None:
+            call_ids.add(str(call_id))
+    return call_ids
 
 
 def import_codex_session(
@@ -352,11 +457,22 @@ def import_codex_session(
     ledger_path: str | Path = "agent-ledger.jsonl",
     agent: str = "codex-cli",
     cwd: str | Path | None = None,
+    policy_path: str | Path | None = None,
 ) -> int:
-    """Import a Codex session JSONL file into the ledger. Returns count of appended events."""
+    """Import a Codex session JSONL file into the ledger. Returns count of appended events.
+
+    When `policy_path` is given, each imported `tool.pre` event is classified
+    against that policy and carries the resulting decision.
+    """
+    from agent_loop.policy import load_policy
+
     p = Path(source_path)
     count = 0
     context = _ImportContext(cwd=normalize_path(cwd) if cwd else None)
+    policy = load_policy(policy_path) if policy_path else None
+
+    with p.open("r", encoding="utf-8") as f:
+        context.exec_end_call_ids = _scan_exec_end_call_ids(f)
 
     with p.open("r", encoding="utf-8") as f:
         for lineno, raw in enumerate(f, start=1):
@@ -391,8 +507,11 @@ def import_codex_session(
                 fallback_session_id=context.session_id,
                 repo_cache=context.repo_cache,
                 tool_calls=context.tool_calls,
+                output_call_ids=context.output_call_ids,
+                exec_end_call_ids=context.exec_end_call_ids,
             )
             if event is not None:
+                apply_policy_to_event(event, policy)
                 append_event(ledger_path, event)
                 count += 1
 

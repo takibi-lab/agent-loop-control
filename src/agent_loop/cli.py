@@ -177,7 +177,12 @@ def hook_collect(ledger, policy_file):
     show_default=True,
     help="Session transcript format. 'auto' detects Codex vs Claude Code.",
 )
-def import_session(source_file, ledger, agent, cwd, session_format):
+@click.option(
+    "--policy-file",
+    default=None,
+    help="Optional policy file used to classify imported tool.pre events.",
+)
+def import_session(source_file, ledger, agent, cwd, session_format, policy_file):
     """Import a Codex CLI or Claude Code session transcript into the ledger."""
     from agent_loop.importer import import_session as run_import
 
@@ -187,6 +192,7 @@ def import_session(source_file, ledger, agent, cwd, session_format):
         agent=agent,
         cwd=cwd,
         session_format=session_format,
+        policy_path=policy_file,
     )
     click.echo(f"Imported {count} events from {source_file}")
 
