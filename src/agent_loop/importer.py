@@ -36,6 +36,22 @@ _DEFAULT_TOOL_NAMES = {
     "patch_apply_end": "apply_patch",
     "web_search_call": "web_search",
     "web_search_end": "web_search",
+    "exec_command_end": "exec_command",
+}
+
+# Codex emits an `event_msg`/`exec_command_end` payload with the real exit code
+# for every shell call, in addition to the model-facing `function_call_output`.
+# Both share a `call_id`; only the first output record per call_id is emitted so
+# the richer `exec_command_end` is not double-counted with `function_call_output`.
+_TOOL_OUTPUT_TYPES = {
+    "function_call_output",
+    "custom_tool_call_output",
+    "exec_command_end",
+    "image_generation_end",
+    "mcp_tool_call_end",
+    "patch_apply_end",
+    "tool_result",
+    "web_search_end",
 }
 
 
@@ -45,6 +61,7 @@ class _ImportContext:
     cwd: str | None = None
     repo_cache: dict[str, dict[str, Any] | None] = field(default_factory=dict)
     tool_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
+    output_call_ids: set[str] = field(default_factory=set)
 
 
 def _record_cwd(record: dict, fallback_cwd: str | Path | None) -> str | None:
@@ -211,6 +228,7 @@ def _normalize_codex_record(
     fallback_session_id: str | None = None,
     repo_cache: dict[str, dict[str, Any] | None] | None = None,
     tool_calls: dict[str, dict[str, Any]] | None = None,
+    output_call_ids: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Normalize one Codex session record to a ledger event dict."""
     record = _unwrap_codex_record(record)
@@ -218,6 +236,7 @@ def _normalize_codex_record(
     role = record.get("role")
     wrapper_type = record.get("_codex_wrapper_type")
     tool_calls = tool_calls if tool_calls is not None else {}
+    output_call_ids = output_call_ids if output_call_ids is not None else set()
 
     if wrapper_type in {"session_meta", "turn_context"} or rtype in _IGNORED_CODEX_TYPES:
         return None
@@ -245,15 +264,15 @@ def _normalize_codex_record(
             extra={"tool": tool_data, **_repo_extra(cwd, repo_cache)},
         )
 
-    if rtype in {
-        "function_call_output",
-        "custom_tool_call_output",
-        "image_generation_end",
-        "mcp_tool_call_end",
-        "patch_apply_end",
-        "tool_result",
-        "web_search_end",
-    }:
+    if rtype in _TOOL_OUTPUT_TYPES:
+        call_id = record.get("call_id") or record.get("id")
+        if call_id is not None and str(call_id) in output_call_ids:
+            # A richer output record for this call was already emitted; skip the
+            # duplicate so exec_command_end and function_call_output do not both count.
+            return None
+        if call_id is not None:
+            output_call_ids.add(str(call_id))
+
         tool_data = _tool_output_data(record, tool_calls)
 
         if tool_data.get("success") is False:
@@ -391,6 +410,7 @@ def import_codex_session(
                 fallback_session_id=context.session_id,
                 repo_cache=context.repo_cache,
                 tool_calls=context.tool_calls,
+                output_call_ids=context.output_call_ids,
             )
             if event is not None:
                 append_event(ledger_path, event)

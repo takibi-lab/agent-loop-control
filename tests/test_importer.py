@@ -312,6 +312,117 @@ def test_codex_desktop_mcp_tool_end_imports_post_event(tmp_path):
     }
 
 
+def test_exec_command_end_normalizes_to_tool_post(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "c1",
+                "arguments": json.dumps({"cmd": "ls -la"}),
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "exec_command_end",
+                    "call_id": "c1",
+                    "command": ["/bin/zsh", "-lc", "ls -la"],
+                    "exit_code": 0,
+                    "status": "completed",
+                    "stdout": "readme.md\n",
+                    "stderr": "",
+                },
+            },
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger)
+
+    assert count == 2
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert [e["event_type"] for e in events] == ["tool.pre", "tool.post"]
+    assert events[1]["tool"]["name"] == "exec_command"
+    assert events[1]["tool"]["call_id"] == "c1"
+    assert events[1]["tool"]["command"] == "ls -la"
+    assert events[1]["tool"]["exit_code"] == 0
+    assert events[1]["tool"]["success"] is True
+
+
+def test_exec_command_end_with_nonzero_exit_normalizes_to_tool_error(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "exec_command_end",
+                    "call_id": "c2",
+                    "command": ["/bin/zsh", "-lc", "sed -n '1,5p' missing.md"],
+                    "exit_code": 1,
+                    "status": "failed",
+                    "stdout": "",
+                    "stderr": "sed: missing.md: No such file or directory",
+                },
+            }
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger)
+
+    assert count == 1
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert events[0]["event_type"] == "tool.error"
+    assert events[0]["tool"]["name"] == "exec_command"
+    assert events[0]["tool"]["exit_code"] == 1
+    assert events[0]["tool"]["success"] is False
+
+
+def test_exec_command_end_and_function_call_output_are_not_double_counted(tmp_path):
+    """A shell call emits both exec_command_end and function_call_output for one
+    call_id; only the first (richer exec_command_end) becomes a ledger event."""
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "dup",
+                "arguments": json.dumps({"cmd": "git status"}),
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "exec_command_end",
+                    "call_id": "dup",
+                    "command": ["/bin/zsh", "-lc", "git status"],
+                    "exit_code": 0,
+                    "status": "completed",
+                },
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "dup",
+                "output": "On branch main",
+            },
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger)
+
+    assert count == 2
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert [e["event_type"] for e in events] == ["tool.pre", "tool.post"]
+    assert events[1]["tool"]["exit_code"] == 0
+    assert verify_ledger(ledger)["valid"] is True
+
+
 def test_malformed_jsonl_emits_blind_spot(tmp_path):
     session = tmp_path / "session.jsonl"
     session.write_text("not-json\n")
