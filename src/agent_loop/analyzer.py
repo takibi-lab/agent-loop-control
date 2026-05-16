@@ -49,15 +49,19 @@ def _failure_section(events: list[dict]) -> list[str]:
             failure_counter[_action_key(e)] += 1
 
     repeated = [(key, count) for key, count in failure_counter.most_common() if count >= 2]
+    total_failures = sum(failure_counter.values())
 
     lines = []
     lines.append("REPEATED FAILURE ANALYSIS:")
+    lines.append(f"  Total failed tool actions:   {total_failures}")
     if repeated:
         lines.append("  Actions that failed repeatedly (review or fix root cause):")
         for key, count in repeated[:10]:
             lines.append(f"  {count:4d}x  {key}")
+    elif total_failures:
+        lines.append("  No action failed two or more times.")
     else:
-        lines.append("  No repeated failures detected.")
+        lines.append("  No failures detected.")
     lines.append("")
     return lines
 

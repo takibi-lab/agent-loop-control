@@ -313,6 +313,39 @@ def _normalize_codex_record(
     )
 
 
+def import_session(
+    source_path: str | Path,
+    *,
+    ledger_path: str | Path = "agent-ledger.jsonl",
+    agent: str | None = None,
+    cwd: str | Path | None = None,
+    session_format: str = "auto",
+) -> int:
+    """Import an agent session transcript, auto-detecting Codex vs Claude Code.
+
+    `session_format` may be "auto", "codex", or "claude-code". Returns the count
+    of appended events.
+    """
+    from agent_loop.claude_importer import import_claude_session, is_claude_session
+
+    if session_format == "auto":
+        session_format = "claude-code" if is_claude_session(source_path) else "codex"
+
+    if session_format == "claude-code":
+        return import_claude_session(
+            source_path,
+            ledger_path=ledger_path,
+            agent=agent or "claude-code",
+            cwd=cwd,
+        )
+    return import_codex_session(
+        source_path,
+        ledger_path=ledger_path,
+        agent=agent or "codex-cli",
+        cwd=cwd,
+    )
+
+
 def import_codex_session(
     source_path: str | Path,
     *,

@@ -167,13 +167,27 @@ def hook_collect(ledger, policy_file):
 @main.command("import")
 @click.argument("source_file")
 @click.option("--ledger", default="agent-ledger.jsonl", help="Ledger file path.")
-@click.option("--agent", default="codex-cli", help="Source agent identifier.")
+@click.option("--agent", default=None, help="Source agent identifier (defaults to the detected format).")
 @click.option("--cwd", default=None, help="Fallback working directory for records without cwd.")
-def import_session(source_file, ledger, agent, cwd):
-    """Import a Codex CLI session JSONL file into the ledger."""
-    from agent_loop.importer import import_codex_session
+@click.option(
+    "--format",
+    "session_format",
+    type=click.Choice(["auto", "codex", "claude-code"]),
+    default="auto",
+    show_default=True,
+    help="Session transcript format. 'auto' detects Codex vs Claude Code.",
+)
+def import_session(source_file, ledger, agent, cwd, session_format):
+    """Import a Codex CLI or Claude Code session transcript into the ledger."""
+    from agent_loop.importer import import_session as run_import
 
-    count = import_codex_session(source_file, ledger_path=ledger, agent=agent, cwd=cwd)
+    count = run_import(
+        source_file,
+        ledger_path=ledger,
+        agent=agent,
+        cwd=cwd,
+        session_format=session_format,
+    )
     click.echo(f"Imported {count} events from {source_file}")
 
 

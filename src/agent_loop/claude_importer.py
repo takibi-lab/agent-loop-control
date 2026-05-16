@@ -1,0 +1,411 @@
+"""Claude Code session transcript importer.
+
+Reads Claude Code session JSONL transcripts and normalizes records to ledger
+events. Unlike Codex JSONL, tool calls are nested as ``tool_use`` blocks inside
+``assistant`` message content, and tool results are nested as ``tool_result``
+blocks inside ``user`` message content. Sub-agent activity lives in separate
+files under ``<session-id>/subagents/``.
+
+Emits blind_spot.declared events for record types that carry no agent activity.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from agent_loop.ledger import append_event, build_event
+from agent_loop.repo_context import normalize_path, resolve_repo_context
+
+_BLIND_SPOTS = [
+    "Hidden model reasoning (thinking blocks) is not captured.",
+    "Provider-side request/response logs are unavailable.",
+    "This record type carries transcript metadata, not agent tool activity.",
+]
+
+# Keys that reliably appear in Claude Code transcripts but never in Codex JSONL.
+_CLAUDE_MARKER_KEYS = {"parentUuid", "isSidechain", "sessionId", "uuid", "leafUuid", "gitBranch"}
+
+# Tools whose input names a file; used to populate the event `files` array.
+_PATH_TOOL_OPERATIONS = {
+    "Read": "read",
+    "Edit": "edit",
+    "MultiEdit": "edit",
+    "Write": "write",
+    "NotebookEdit": "edit",
+}
+
+
+@dataclass
+class _ClaudeContext:
+    session_id: str | None = None
+    cwd: str | None = None
+    repo_cache: dict[str, dict[str, Any] | None] = field(default_factory=dict)
+    # tool_use id -> remembered tool metadata, used to label the matching result.
+    tool_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+def _repo_extra(cwd: str | None, repo_cache: dict[str, dict[str, Any] | None]) -> dict[str, Any]:
+    if not cwd:
+        return {}
+    if cwd not in repo_cache:
+        repo_cache[cwd] = resolve_repo_context(cwd)
+    repo = repo_cache[cwd]
+    return {"repo": repo} if repo is not None else {}
+
+
+def _truncate(value: Any, limit: int = 200) -> str:
+    if isinstance(value, str):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return text[:limit]
+
+
+def _block_text(content: Any) -> str:
+    """Join text from a content value that is a string or a list of blocks."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+            parts.append(str(block["text"]))
+    return "\n".join(parts)
+
+
+def is_claude_session(source_path: str | Path) -> bool:
+    """Return True when the JSONL file looks like a Claude Code transcript."""
+    p = Path(source_path)
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            for lineno, raw in enumerate(f):
+                if lineno >= 40:
+                    break
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict) and _CLAUDE_MARKER_KEYS & record.keys():
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _files_for_tool(name: Any, tool_input: Any) -> list[dict[str, str]]:
+    """Return a `files` array entry when a tool input names a file path."""
+    if not isinstance(tool_input, dict):
+        return []
+    operation = _PATH_TOOL_OPERATIONS.get(str(name))
+    path = tool_input.get("file_path") or tool_input.get("notebook_path")
+    if operation and path:
+        return [{"path": str(path), "operation": operation}]
+    return []
+
+
+def _tool_use_event(
+    block: dict[str, Any],
+    agent: str,
+    *,
+    session_id: str | None,
+    cwd: str | None,
+    repo_extra: dict[str, Any],
+    context: _ClaudeContext,
+) -> dict[str, Any]:
+    tool_input = block.get("input")
+    tool_data: dict[str, Any] = {}
+
+    name = block.get("name")
+    if name:
+        tool_data["name"] = name
+
+    call_id = block.get("id")
+    if call_id:
+        tool_data["call_id"] = str(call_id)
+
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if isinstance(command, str) and command:
+        tool_data["command"] = command
+        tool_data["input_summary"] = command[:200]
+    elif tool_input:
+        tool_data["input_summary"] = _truncate(tool_input)
+    if isinstance(tool_input, dict):
+        tool_data["input_full"] = tool_input
+
+    if call_id:
+        context.tool_calls[str(call_id)] = {"name": name} if name else {}
+
+    extra: dict[str, Any] = {"tool": tool_data, **repo_extra}
+    files = _files_for_tool(name, tool_input)
+    if files:
+        extra["files"] = files
+
+    return build_event(
+        "tool.pre",
+        agent,
+        session_id=session_id,
+        cwd=cwd,
+        extra=extra,
+    )
+
+
+def _tool_result_event(
+    block: dict[str, Any],
+    agent: str,
+    *,
+    session_id: str | None,
+    cwd: str | None,
+    repo_extra: dict[str, Any],
+    context: _ClaudeContext,
+) -> dict[str, Any]:
+    call_id = block.get("tool_use_id")
+    remembered = context.tool_calls.get(str(call_id), {}) if call_id else {}
+
+    tool_data: dict[str, Any] = {}
+    name = remembered.get("name")
+    if name:
+        tool_data["name"] = name
+    if call_id:
+        tool_data["call_id"] = str(call_id)
+
+    is_error = bool(block.get("is_error"))
+    tool_data["success"] = not is_error
+
+    if is_error:
+        error_text = _block_text(block.get("content"))
+        if error_text:
+            tool_data["error"] = error_text[:200]
+
+    return build_event(
+        "tool.error" if is_error else "tool.post",
+        agent,
+        session_id=session_id,
+        cwd=cwd,
+        extra={"tool": tool_data, **repo_extra},
+    )
+
+
+def _normalize_claude_record(
+    record: dict[str, Any],
+    agent: str,
+    context: _ClaudeContext,
+    *,
+    sub_agent: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Normalize one Claude Code transcript record to zero or more ledger events."""
+    rtype = record.get("type")
+    session_id = record.get("sessionId") or context.session_id
+    cwd = normalize_path(record["cwd"]) if record.get("cwd") else context.cwd
+    repo_extra = _repo_extra(cwd, context.repo_cache)
+
+    message = record.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+
+    events: list[dict[str, Any]] = []
+
+    if rtype == "assistant":
+        if isinstance(content, list):
+            text = _block_text(content).strip()
+            if text:
+                events.append(
+                    build_event(
+                        "recommendation.created",
+                        agent,
+                        session_id=session_id,
+                        cwd=cwd,
+                        extra={"message": text[:500], **repo_extra},
+                    )
+                )
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    events.append(
+                        _tool_use_event(
+                            block,
+                            agent,
+                            session_id=session_id,
+                            cwd=cwd,
+                            repo_extra=repo_extra,
+                            context=context,
+                        )
+                    )
+        return _attribute(events, sub_agent)
+
+    if rtype == "user":
+        # Meta records (slash-command caveats, hook plumbing) are not prompts.
+        if record.get("isMeta"):
+            return []
+
+        tool_results = (
+            [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+            if isinstance(content, list)
+            else []
+        )
+        if tool_results:
+            for block in tool_results:
+                events.append(
+                    _tool_result_event(
+                        block,
+                        agent,
+                        session_id=session_id,
+                        cwd=cwd,
+                        repo_extra=repo_extra,
+                        context=context,
+                    )
+                )
+            return _attribute(events, sub_agent)
+
+        # A genuine prompt is plain user text, never a tool_result carrier.
+        text = _block_text(content).strip()
+        if text:
+            events.append(
+                build_event(
+                    "prompt.submitted",
+                    agent,
+                    session_id=session_id,
+                    cwd=cwd,
+                    extra={"prompt": text[:500], **repo_extra},
+                )
+            )
+        return _attribute(events, sub_agent)
+
+    # Any other record type (system, attachment, file-history-snapshot,
+    # last-prompt, permission-mode, ai-title, pr-link, ...) carries no agent
+    # tool activity and is recorded as an explicit blind spot.
+    events.append(
+        build_event(
+            "blind_spot.declared",
+            agent,
+            session_id=session_id,
+            cwd=cwd,
+            extra={
+                "blind_spots": [
+                    f"Unsupported Claude Code record type: {rtype!r}",
+                    *_BLIND_SPOTS,
+                ],
+                **repo_extra,
+            },
+        )
+    )
+    return _attribute(events, sub_agent)
+
+
+def _attribute(events: list[dict[str, Any]], sub_agent: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Tag sub-agent events so they link back to their parent session."""
+    if sub_agent:
+        for event in events:
+            event["sub_agent"] = dict(sub_agent)
+            event.setdefault("session", {})["agent_id"] = sub_agent["agent_id"]
+    return events
+
+
+def _import_claude_file(
+    source_path: Path,
+    ledger_path: str | Path,
+    agent: str,
+    context: _ClaudeContext,
+    *,
+    sub_agent: dict[str, Any] | None = None,
+) -> int:
+    count = 0
+    with source_path.open("r", encoding="utf-8") as f:
+        for lineno, raw in enumerate(f, start=1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                record = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                event = build_event(
+                    "blind_spot.declared",
+                    agent,
+                    session_id=context.session_id,
+                    cwd=context.cwd,
+                    extra={
+                        "blind_spots": [f"Line {lineno}: malformed JSON: {exc}", *_BLIND_SPOTS],
+                        **_repo_extra(context.cwd, context.repo_cache),
+                    },
+                )
+                append_event(ledger_path, _attribute([event], sub_agent)[0])
+                count += 1
+                continue
+
+            if not isinstance(record, dict):
+                continue
+
+            # Track session id and cwd so later records without them inherit context.
+            if sub_agent is None:
+                if record.get("sessionId") and context.session_id is None:
+                    context.session_id = str(record["sessionId"])
+                if record.get("cwd"):
+                    context.cwd = normalize_path(record["cwd"])
+
+            for event in _normalize_claude_record(record, agent, context, sub_agent=sub_agent):
+                append_event(ledger_path, event)
+                count += 1
+
+    return count
+
+
+def _subagent_metadata(sub_file: Path, parent_session_id: str | None) -> dict[str, Any]:
+    """Build sub-agent attribution metadata from the transcript and meta sidecar."""
+    agent_id = sub_file.stem.removeprefix("agent-")
+    sub_agent: dict[str, Any] = {"agent_id": agent_id}
+    if parent_session_id:
+        sub_agent["parent_session_id"] = parent_session_id
+
+    meta_path = sub_file.parent / f"{sub_file.stem}.meta.json"
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            meta = {}
+        if isinstance(meta, dict):
+            if meta.get("agentType"):
+                sub_agent["type"] = str(meta["agentType"])
+            if meta.get("description"):
+                sub_agent["description"] = str(meta["description"])
+    return sub_agent
+
+
+def import_claude_session(
+    source_path: str | Path,
+    *,
+    ledger_path: str | Path = "agent-ledger.jsonl",
+    agent: str = "claude-code",
+    cwd: str | Path | None = None,
+    include_subagents: bool = True,
+) -> int:
+    """Import a Claude Code session transcript into the ledger.
+
+    Recurses into ``<session-id>/subagents/*.jsonl`` siblings when present and
+    attributes those events back to the parent session. Returns the count of
+    appended events.
+    """
+    p = Path(source_path)
+    context = _ClaudeContext(cwd=normalize_path(cwd) if cwd else None)
+
+    count = _import_claude_file(p, ledger_path, agent, context)
+
+    if include_subagents:
+        sub_dir = p.parent / p.stem / "subagents"
+        if sub_dir.is_dir():
+            for sub_file in sorted(sub_dir.glob("*.jsonl")):
+                sub_agent = _subagent_metadata(sub_file, context.session_id)
+                count += _import_claude_file(
+                    sub_file,
+                    ledger_path,
+                    agent,
+                    context,
+                    sub_agent=sub_agent,
+                )
+
+    return count
