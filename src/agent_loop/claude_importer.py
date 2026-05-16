@@ -30,11 +30,13 @@ _BLIND_SPOTS = [
 _CLAUDE_MARKER_KEYS = {"parentUuid", "isSidechain", "sessionId", "uuid", "leafUuid", "gitBranch"}
 
 # Transcript bookkeeping records that carry no agent tool activity (session
-# titles, file backup snapshots, prompt pointers, queue plumbing). They are
-# skipped silently, like Codex telemetry records, so they do not inflate
-# blind-spot counts in the analyzer's import-visibility report. Record types
-# that sit closer to real activity (system, attachment, permission-mode,
-# pr-link) are still declared as blind spots until the importer handles them.
+# titles, file backup snapshots, prompt pointers, queue plumbing, system
+# notices, PR links). They are skipped silently, like Codex telemetry records,
+# so they do not inflate blind-spot counts in the analyzer's import-visibility
+# report. Record types with real agent activity are normalized instead:
+# `attachment` and `permission-mode` are handled in _normalize_claude_record,
+# and any record type that is neither normalized nor listed here falls through
+# to a blind_spot.declared event.
 _IGNORED_CLAUDE_TYPES = {
     "agent-name",
     "ai-title",

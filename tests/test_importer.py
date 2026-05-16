@@ -445,36 +445,35 @@ def test_exec_command_end_with_nonzero_exit_normalizes_to_tool_error(tmp_path):
     assert events[0]["tool"]["success"] is False
 
 
+def _exec_dup_records(*, end_before_output: bool) -> list[dict]:
+    """Records for one shell call that emits both exec_command_end and
+    function_call_output, ordered either way."""
+    call = {
+        "type": "function_call",
+        "name": "exec_command",
+        "call_id": "dup",
+        "arguments": json.dumps({"cmd": "git status"}),
+    }
+    exec_end = {
+        "type": "event_msg",
+        "payload": {
+            "type": "exec_command_end",
+            "call_id": "dup",
+            "command": ["/bin/zsh", "-lc", "git status"],
+            "exit_code": 0,
+            "status": "completed",
+        },
+    }
+    output = {"type": "function_call_output", "call_id": "dup", "output": "On branch main"}
+    tail = [exec_end, output] if end_before_output else [output, exec_end]
+    return [call, *tail]
+
+
 def test_exec_command_end_and_function_call_output_are_not_double_counted(tmp_path):
     """A shell call emits both exec_command_end and function_call_output for one
-    call_id; only the first (richer exec_command_end) becomes a ledger event."""
+    call_id; only the richer exec_command_end becomes a tool.post event."""
     session = tmp_path / "session.jsonl"
-    _write_session(
-        session,
-        [
-            {
-                "type": "function_call",
-                "name": "exec_command",
-                "call_id": "dup",
-                "arguments": json.dumps({"cmd": "git status"}),
-            },
-            {
-                "type": "event_msg",
-                "payload": {
-                    "type": "exec_command_end",
-                    "call_id": "dup",
-                    "command": ["/bin/zsh", "-lc", "git status"],
-                    "exit_code": 0,
-                    "status": "completed",
-                },
-            },
-            {
-                "type": "function_call_output",
-                "call_id": "dup",
-                "output": "On branch main",
-            },
-        ],
-    )
+    _write_session(session, _exec_dup_records(end_before_output=True))
     ledger = tmp_path / "l.jsonl"
 
     count = import_codex_session(session, ledger_path=ledger)
@@ -482,6 +481,23 @@ def test_exec_command_end_and_function_call_output_are_not_double_counted(tmp_pa
     assert count == 2
     events = [json.loads(line) for line in ledger.read_text().splitlines()]
     assert [e["event_type"] for e in events] == ["tool.pre", "tool.post"]
+    assert events[1]["tool"]["exit_code"] == 0
+    assert verify_ledger(ledger)["valid"] is True
+
+
+def test_exec_command_end_wins_even_when_function_call_output_comes_first(tmp_path):
+    """exec_command_end is preferred regardless of transcript order: the leaner
+    function_call_output is dropped even when it appears first."""
+    session = tmp_path / "session.jsonl"
+    _write_session(session, _exec_dup_records(end_before_output=False))
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger)
+
+    assert count == 2
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert [e["event_type"] for e in events] == ["tool.pre", "tool.post"]
+    # The kept output record is exec_command_end, which carries the exit code.
     assert events[1]["tool"]["exit_code"] == 0
     assert verify_ledger(ledger)["valid"] is True
 

@@ -7,6 +7,7 @@ Emits blind_spot.declared events for unsupported or incomplete records.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -54,8 +55,9 @@ _TOOL_CALL_TYPES = {
 
 # Codex emits an `event_msg`/`exec_command_end` payload with the real exit code
 # for every shell call, in addition to the model-facing `function_call_output`.
-# Both share a `call_id`; only the first output record per call_id is emitted so
-# the richer `exec_command_end` is not double-counted with `function_call_output`.
+# Both share a `call_id`; `_scan_exec_end_call_ids` collects every
+# `exec_command_end` call_id up front so the paired `function_call_output` is
+# always dropped in favor of the richer record, regardless of transcript order.
 _TOOL_OUTPUT_TYPES = {
     "function_call_output",
     "custom_tool_call_output",
@@ -75,6 +77,8 @@ class _ImportContext:
     repo_cache: dict[str, dict[str, Any] | None] = field(default_factory=dict)
     tool_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
     output_call_ids: set[str] = field(default_factory=set)
+    # call_ids that have an exec_command_end record anywhere in the transcript.
+    exec_end_call_ids: set[str] = field(default_factory=set)
 
 
 def _record_cwd(record: dict, fallback_cwd: str | Path | None) -> str | None:
@@ -242,6 +246,7 @@ def _normalize_codex_record(
     repo_cache: dict[str, dict[str, Any] | None] | None = None,
     tool_calls: dict[str, dict[str, Any]] | None = None,
     output_call_ids: set[str] | None = None,
+    exec_end_call_ids: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Normalize one Codex session record to a ledger event dict."""
     record = _unwrap_codex_record(record)
@@ -250,6 +255,7 @@ def _normalize_codex_record(
     wrapper_type = record.get("_codex_wrapper_type")
     tool_calls = tool_calls if tool_calls is not None else {}
     output_call_ids = output_call_ids if output_call_ids is not None else set()
+    exec_end_call_ids = exec_end_call_ids if exec_end_call_ids is not None else set()
 
     if wrapper_type in {"session_meta", "turn_context"} or rtype in _IGNORED_CODEX_TYPES:
         return None
@@ -277,12 +283,19 @@ def _normalize_codex_record(
 
     if rtype in _TOOL_OUTPUT_TYPES:
         call_id = record.get("call_id") or record.get("id")
-        if call_id is not None and str(call_id) in output_call_ids:
-            # A richer output record for this call was already emitted; skip the
-            # duplicate so exec_command_end and function_call_output do not both count.
+        cid = str(call_id) if call_id is not None else None
+        # Codex emits both `exec_command_end` (real exit code) and the
+        # model-facing `function_call_output` for one shell `call_id`. Drop the
+        # `function_call_output` whenever an `exec_command_end` exists for the
+        # same call_id, regardless of which record appears first, so the richer
+        # record always wins and the shell call is not double-counted.
+        if rtype == "function_call_output" and cid is not None and cid in exec_end_call_ids:
             return None
-        if call_id is not None:
-            output_call_ids.add(str(call_id))
+        # Guard against the same output record repeating for one call_id.
+        if cid is not None:
+            if cid in output_call_ids:
+                return None
+            output_call_ids.add(cid)
 
         tool_data = _tool_output_data(record, tool_calls)
 
@@ -411,6 +424,33 @@ def import_session(
     )
 
 
+def _scan_exec_end_call_ids(lines: Iterable[str]) -> set[str]:
+    """Collect every call_id that has an `exec_command_end` record.
+
+    Codex emits both `exec_command_end` and `function_call_output` for one
+    shell `call_id`. Pre-scanning the whole transcript lets the importer always
+    prefer the richer `exec_command_end`, no matter which record comes first.
+    """
+    call_ids: set[str] = set()
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        record = _unwrap_codex_record(record)
+        if record.get("type") != "exec_command_end":
+            continue
+        call_id = record.get("call_id") or record.get("id")
+        if call_id is not None:
+            call_ids.add(str(call_id))
+    return call_ids
+
+
 def import_codex_session(
     source_path: str | Path,
     *,
@@ -430,6 +470,9 @@ def import_codex_session(
     count = 0
     context = _ImportContext(cwd=normalize_path(cwd) if cwd else None)
     policy = load_policy(policy_path) if policy_path else None
+
+    with p.open("r", encoding="utf-8") as f:
+        context.exec_end_call_ids = _scan_exec_end_call_ids(f)
 
     with p.open("r", encoding="utf-8") as f:
         for lineno, raw in enumerate(f, start=1):
@@ -465,6 +508,7 @@ def import_codex_session(
                 repo_cache=context.repo_cache,
                 tool_calls=context.tool_calls,
                 output_call_ids=context.output_call_ids,
+                exec_end_call_ids=context.exec_end_call_ids,
             )
             if event is not None:
                 apply_policy_to_event(event, policy)
