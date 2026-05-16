@@ -7,7 +7,9 @@
 # AI agent local state and private configuration
 .agent/
 .agents/
-.claude/
+# Ignore local Claude config but keep shared project skills under version control.
+.claude/*
+!.claude/skills/
 .codex/
 .cursor/
 .continue/
