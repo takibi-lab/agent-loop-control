@@ -29,6 +29,43 @@ def _action_key(event: dict) -> str:
     return "unknown"
 
 
+def _is_failure(event: dict) -> bool:
+    """Return True when an event represents a failed tool action."""
+    if event.get("event_type") == "tool.error":
+        return True
+    tool = event.get("tool")
+    return isinstance(tool, dict) and tool.get("success") is False
+
+
+def _failure_section(events: list[dict]) -> list[str]:
+    """Build the repeated-failure report section as report lines.
+
+    Failures are grouped with `_action_key()` and only actions that failed
+    two or more times are reported, ordered by frequency.
+    """
+    failure_counter: Counter = Counter()
+    for e in events:
+        if _is_failure(e):
+            failure_counter[_action_key(e)] += 1
+
+    repeated = [(key, count) for key, count in failure_counter.most_common() if count >= 2]
+    total_failures = sum(failure_counter.values())
+
+    lines = []
+    lines.append("REPEATED FAILURE ANALYSIS:")
+    lines.append(f"  Total failed tool actions:   {total_failures}")
+    if repeated:
+        lines.append("  Actions that failed repeatedly (review or fix root cause):")
+        for key, count in repeated[:10]:
+            lines.append(f"  {count:4d}x  {key}")
+    elif total_failures:
+        lines.append("  No action failed two or more times.")
+    else:
+        lines.append("  No failures detected.")
+    lines.append("")
+    return lines
+
+
 def _repo_breakdown(events: list[dict]) -> str:
     if not events:
         return "No events in ledger. Nothing to analyze."
@@ -76,7 +113,10 @@ def analyze_approvals(
     if not events:
         return "No matching events in ledger. Nothing to analyze."
 
-    policy_events = [e for e in events if e.get("event_type") == "policy.decision"]
+    decision_events = [
+        e for e in events
+        if isinstance(e.get("policy"), dict) and e["policy"].get("decision")
+    ]
     approval_requests = [e for e in events if e.get("event_type") == "approval.requested"]
     approval_resolved = [e for e in events if e.get("event_type") == "approval.resolved"]
 
@@ -110,7 +150,7 @@ def analyze_approvals(
     lines.append("APPROVAL FATIGUE ANALYSIS REPORT")
     lines.append("=" * 60)
     lines.append(f"Total events analyzed:       {len(events)}")
-    lines.append(f"Policy decisions recorded:   {len(policy_events)}")
+    lines.append(f"Actions with policy decision:{len(decision_events):5d}")
     lines.append(f"  ask decisions:             {len(ask_events)}")
     lines.append(f"  deny decisions:            {len(deny_events)}")
     lines.append(f"  allow decisions:           {len(allow_events)}")
@@ -142,6 +182,8 @@ def analyze_approvals(
         for key, count in deny_counter.most_common(10):
             lines.append(f"  {count:4d}x  {key}")
         lines.append("")
+
+    lines.extend(_failure_section(events))
 
     lines.append("BLIND SPOTS AND ASSUMPTIONS:")
     lines.append("  - Only captured hook events are analyzed; bypassed actions are invisible.")

@@ -43,7 +43,7 @@ workflow to enforce. Every captured decision and result is recorded locally.
 
 - `agent-policy.yaml` for allow / ask / deny rules.
 - Claude Code hook collector.
-- Codex CLI session JSONL importer.
+- Codex CLI and Claude Code session transcript importer.
 - Single hash-chained local ledger with repository context on each event.
 - Git diff snapshotting.
 - Timeline and provenance views.
@@ -137,13 +137,23 @@ Capture the current Git repository state and staged/unstaged diff hash:
 agent-loop snapshot --ledger ~/.agent-loop/ledger.jsonl --repo .
 ```
 
-Import a Codex CLI or Codex Desktop session JSONL file:
+Import a session transcript. The format (Codex CLI / Codex Desktop / Claude Code)
+is auto-detected; use `--format` to override:
 
 ```bash
 agent-loop import ~/.codex/sessions/<session-file>.jsonl \
   --ledger ~/.agent-loop/ledger.jsonl \
   --agent codex-desktop \
   --cwd /path/to/repo
+```
+
+Claude Code transcripts live under `~/.claude/projects/<project>/`. Importing the
+main `<session-id>.jsonl` also pulls in any sub-agent transcripts found under
+`<session-id>/subagents/` and attributes them to the parent session:
+
+```bash
+agent-loop import ~/.claude/projects/<project>/<session-id>.jsonl \
+  --ledger ~/.agent-loop/ledger.jsonl
 ```
 
 ## Claude Code Hooks

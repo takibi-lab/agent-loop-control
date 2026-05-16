@@ -27,26 +27,52 @@ def test_post_tool_use_normalizes_to_tool_post(tmp_path):
     assert event["event_type"] == "tool.post"
 
 
-def test_post_tool_failure_normalizes_to_tool_error(tmp_path):
+def test_post_tool_failure_captures_error_and_tool_context(tmp_path):
     ledger = tmp_path / "l.jsonl"
-    payload = _make_hook("PostToolUseFailure", tool_name="Bash")
+    payload = _make_hook(
+        "PostToolUseFailure",
+        tool_name="Bash",
+        tool_input={"command": "npm test"},
+        error="exit code 1: test suite failed",
+    )
     event = collect_hook_event(payload, ledger_path=ledger)
     assert event["event_type"] == "tool.error"
+    assert event["tool"]["name"] == "Bash"
+    assert event["tool"]["command"] == "npm test"
+    assert event["tool"]["success"] is False
+    assert event["tool"]["error"] == "exit code 1: test suite failed"
 
 
-def test_permission_request_normalizes(tmp_path):
+def test_permission_request_captures_tool_context(tmp_path):
     ledger = tmp_path / "l.jsonl"
-    payload = _make_hook("PermissionRequest", reason="needs network")
+    payload = _make_hook(
+        "PermissionRequest",
+        tool_name="Bash",
+        tool_input={"command": "curl https://example.com"},
+    )
     event = collect_hook_event(payload, ledger_path=ledger)
     assert event["event_type"] == "approval.requested"
+    assert event["approval"]["status"] == "requested"
+    assert event["tool"]["name"] == "Bash"
+    assert event["tool"]["command"] == "curl https://example.com"
+    # No empty reason string is written when the payload carries no reason.
+    assert "reason" not in event["approval"]
 
 
-def test_permission_denied_normalizes(tmp_path):
+def test_permission_denied_captures_tool_context_and_retry(tmp_path):
     ledger = tmp_path / "l.jsonl"
-    payload = _make_hook("PermissionDenied", reason="policy block")
+    payload = _make_hook(
+        "PermissionDenied",
+        tool_name="Write",
+        tool_input={"file_path": "secrets/key.pem"},
+        retry=True,
+    )
     event = collect_hook_event(payload, ledger_path=ledger)
     assert event["event_type"] == "approval.resolved"
     assert event["approval"]["status"] == "denied"
+    assert event["approval"]["retry"] is True
+    assert event["tool"]["name"] == "Write"
+    assert event["tool"]["input_full"]["file_path"] == "secrets/key.pem"
 
 
 def test_session_start_normalizes(tmp_path):
