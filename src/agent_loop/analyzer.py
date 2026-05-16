@@ -69,6 +69,95 @@ def _failure_section(events: list[dict]) -> list[str]:
     return lines
 
 
+# Shell commands whose primary verb duplicates a dedicated Claude Code tool.
+_NATIVE_TOOL_SHELL_VERBS = {"cat", "find", "grep", "head", "ls", "rg", "sed", "tail"}
+
+
+def _bash_primary_verb(command: str) -> str:
+    """Return the leading command word, skipping a leading `cd ... &&` prefix.
+
+    `cd /repo && grep foo` reports `grep`; a bare `cd /repo` reports "".
+    """
+    for segment in command.split("&&"):
+        tokens = segment.strip().split()
+        if not tokens or tokens[0] == "cd":
+            continue
+        return tokens[0]
+    return ""
+
+
+def _tool_hygiene_section(events: list[dict]) -> list[str]:
+    """Build the Claude Code tool-usage hygiene section as report lines.
+
+    Surfaces habits visible in imported Claude Code transcripts: shell calls
+    whose primary verb duplicates a dedicated tool, file-not-found errors,
+    edit-before-read violations, and how widely subagents are used. The section
+    is omitted when the ledger contains no Claude Code events.
+    """
+    cc = [e for e in events if (e.get("source") or {}).get("agent") == "claude-code"]
+    if not cc:
+        return []
+
+    bash_total = 0
+    bash_replaceable: Counter = Counter()
+    sessions: set[str] = set()
+    sessions_with_agent: set[str] = set()
+    tool_errors = 0
+    file_not_found = 0
+    edit_before_read = 0
+
+    for e in cc:
+        tool = e.get("tool") if isinstance(e.get("tool"), dict) else {}
+        name = tool.get("name", "")
+        sid = (e.get("session") or {}).get("session_id")
+        if sid:
+            sessions.add(sid)
+        if e.get("event_type") == "tool.pre":
+            if name == "Bash":
+                bash_total += 1
+                verb = _bash_primary_verb(str(tool.get("command") or ""))
+                if verb in _NATIVE_TOOL_SHELL_VERBS:
+                    bash_replaceable[verb] += 1
+            elif name == "Agent" and sid:
+                sessions_with_agent.add(sid)
+        if _is_failure(e):
+            tool_errors += 1
+            err = str(tool.get("error") or "").lower()
+            if "has not been read" in err:
+                edit_before_read += 1
+            elif any(s in err for s in ("no such file", "does not exist", "enoent")):
+                file_not_found += 1
+
+    lines = ["CLAUDE CODE TOOL USAGE HYGIENE:"]
+    lines.append(f"  Claude Code sessions:        {len(sessions)}")
+    replaceable = sum(bash_replaceable.values())
+    if bash_total:
+        pct = 100 * replaceable / bash_total
+        lines.append(
+            f"  Bash calls replaceable by a dedicated tool: "
+            f"{replaceable}/{bash_total} ({pct:.0f}%)"
+        )
+        if bash_replaceable:
+            by_verb = ", ".join(f"{c} {v}" for v, c in bash_replaceable.most_common(5))
+            lines.append(f"    by verb: {by_verb}  -> prefer Glob / Grep / Read")
+    if tool_errors:
+        fnf_pct = 100 * file_not_found / tool_errors
+        lines.append(
+            f"  File-not-found errors:       "
+            f"{file_not_found}/{tool_errors} tool errors ({fnf_pct:.0f}%)"
+        )
+    if edit_before_read:
+        lines.append(f"  Edit-before-Read violations: {edit_before_read}")
+    if sessions:
+        agent_pct = 100 * len(sessions_with_agent) / len(sessions)
+        lines.append(
+            f"  Sessions delegating to subagents: "
+            f"{len(sessions_with_agent)}/{len(sessions)} ({agent_pct:.0f}%)"
+        )
+    lines.append("")
+    return lines
+
+
 def _import_visibility_section(events: list[dict]) -> list[str]:
     """Build the import-visibility report section as report lines.
 
@@ -223,6 +312,7 @@ def analyze_approvals(
         lines.append("")
 
     lines.extend(_failure_section(events))
+    lines.extend(_tool_hygiene_section(events))
     lines.extend(_import_visibility_section(events))
 
     lines.append("BLIND SPOTS AND ASSUMPTIONS:")

@@ -48,6 +48,14 @@ def _append_tool_error(ledger, *, command: str) -> dict:
     )
 
 
+def _append_cc(ledger, event_type: str, *, tool: dict, session_id: str = "s1") -> dict:
+    """Append a Claude Code tool event with a given tool dict and session id."""
+    return append_event(
+        ledger,
+        build_event(event_type, "claude-code", session_id=session_id, extra={"tool": tool}),
+    )
+
+
 def _append_blind_spot(ledger, *, reason: str) -> dict:
     """Append a blind_spot.declared event as the importer would."""
     return append_event(
@@ -120,6 +128,55 @@ def test_no_repeated_failures_section_when_failures_are_unique(tmp_path):
     assert "REPEATED FAILURE ANALYSIS:" in report
     assert "Total failed tool actions:   1" in report
     assert "No action failed two or more times." in report
+
+
+def test_tool_hygiene_flags_bash_replaceable_by_native_tools(tmp_path):
+    """Bash calls whose primary verb duplicates a dedicated tool are counted."""
+    ledger = tmp_path / "ledger.jsonl"
+    _append_cc(ledger, "tool.pre", tool={"name": "Bash", "command": "find . -name '*.py'"})
+    _append_cc(ledger, "tool.pre", tool={"name": "Bash", "command": "cd /repo && grep foo src"})
+    _append_cc(ledger, "tool.pre", tool={"name": "Bash", "command": "git status --short"})
+
+    report = analyze_approvals(ledger)
+
+    assert "CLAUDE CODE TOOL USAGE HYGIENE:" in report
+    assert "Bash calls replaceable by a dedicated tool: 2/3 (67%)" in report
+    assert "prefer Glob / Grep / Read" in report
+
+
+def test_tool_hygiene_reports_errors_and_subagent_use(tmp_path):
+    """File-not-found, edit-before-read, and subagent metrics are reported."""
+    ledger = tmp_path / "ledger.jsonl"
+    _append_cc(ledger, "tool.pre", tool={"name": "Agent"}, session_id="s1")
+    _append_cc(
+        ledger,
+        "tool.error",
+        tool={"name": "Read", "success": False, "error": "Error: no such file or directory"},
+        session_id="s1",
+    )
+    _append_cc(
+        ledger,
+        "tool.error",
+        tool={"name": "Edit", "success": False, "error": "File has not been read yet."},
+        session_id="s2",
+    )
+
+    report = analyze_approvals(ledger)
+
+    assert "Claude Code sessions:        2" in report
+    assert "File-not-found errors:       1/2 tool errors (50%)" in report
+    assert "Edit-before-Read violations: 1" in report
+    assert "Sessions delegating to subagents: 1/2 (50%)" in report
+
+
+def test_tool_hygiene_section_absent_without_claude_code_events(tmp_path):
+    """A ledger with no Claude Code events has no tool-hygiene section."""
+    ledger = tmp_path / "ledger.jsonl"
+    _append_blind_spot(ledger, reason="Unsupported Codex record type: 'error'")
+
+    report = analyze_approvals(ledger)
+
+    assert "CLAUDE CODE TOOL USAGE HYGIENE" not in report
 
 
 def test_import_visibility_reports_blind_spots_and_recommendations(tmp_path):
