@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent_loop.collector import apply_policy_to_event
 from agent_loop.ledger import append_event, build_event
 from agent_loop.repo_context import normalize_path, resolve_repo_context
 
@@ -28,7 +29,9 @@ _IGNORED_CODEX_TYPES = {
     "reasoning",
     "task_complete",
     "task_started",
+    "thread_name_updated",
     "token_count",
+    "turn_aborted",
 }
 _DEFAULT_TOOL_NAMES = {
     "image_generation_call": "image_generation",
@@ -37,6 +40,16 @@ _DEFAULT_TOOL_NAMES = {
     "web_search_call": "web_search",
     "web_search_end": "web_search",
     "exec_command_end": "exec_command",
+    "view_image_tool_call": "view_image",
+}
+
+# Codex record types that represent the model invoking a tool.
+_TOOL_CALL_TYPES = {
+    "function_call",
+    "custom_tool_call",
+    "image_generation_call",
+    "web_search_call",
+    "view_image_tool_call",
 }
 
 # Codex emits an `event_msg`/`exec_command_end` payload with the real exit code
@@ -244,9 +257,7 @@ def _normalize_codex_record(
     session_id = record.get("session_id") or fallback_session_id
     cwd = _record_cwd(record, fallback_cwd)
 
-    if rtype in {"function_call", "custom_tool_call", "image_generation_call", "web_search_call"} or (
-        rtype == "tool" and record.get("call")
-    ):
+    if rtype in _TOOL_CALL_TYPES or (rtype == "tool" and record.get("call")):
         if rtype == "tool" and record.get("call"):
             record = {**record, **record.get("call", {})}
         tool_data, tool_cwd = _tool_call_data(record)
@@ -317,6 +328,37 @@ def _normalize_codex_record(
             )
         return None
 
+    if rtype == "item_completed":
+        # Newer Codex transcripts wrap completed thread items here. A Plan item
+        # carries the agent's planning text; map it to a recommendation. Other
+        # item subtypes are declared as blind spots that name the subtype.
+        item = record.get("item")
+        item_type = item.get("type") if isinstance(item, dict) else None
+        if item_type == "Plan":
+            text = item.get("text") if isinstance(item, dict) else None
+            if not text:
+                return None
+            return build_event(
+                "recommendation.created",
+                agent,
+                session_id=session_id,
+                cwd=cwd,
+                extra={"message": str(text)[:500], **_repo_extra(cwd, repo_cache)},
+            )
+        return build_event(
+            "blind_spot.declared",
+            agent,
+            session_id=session_id,
+            cwd=cwd,
+            extra={
+                "blind_spots": [
+                    f"Unsupported Codex item_completed item type: {item_type!r}",
+                    *_BLIND_SPOTS,
+                ],
+                **_repo_extra(cwd, repo_cache),
+            },
+        )
+
     return build_event(
         "blind_spot.declared",
         agent,
@@ -339,11 +381,13 @@ def import_session(
     agent: str | None = None,
     cwd: str | Path | None = None,
     session_format: str = "auto",
+    policy_path: str | Path | None = None,
 ) -> int:
     """Import an agent session transcript, auto-detecting Codex vs Claude Code.
 
-    `session_format` may be "auto", "codex", or "claude-code". Returns the count
-    of appended events.
+    `session_format` may be "auto", "codex", or "claude-code". When `policy_path`
+    is given, imported `tool.pre` events are classified against that policy.
+    Returns the count of appended events.
     """
     from agent_loop.claude_importer import import_claude_session, is_claude_session
 
@@ -356,12 +400,14 @@ def import_session(
             ledger_path=ledger_path,
             agent=agent or "claude-code",
             cwd=cwd,
+            policy_path=policy_path,
         )
     return import_codex_session(
         source_path,
         ledger_path=ledger_path,
         agent=agent or "codex-cli",
         cwd=cwd,
+        policy_path=policy_path,
     )
 
 
@@ -371,11 +417,19 @@ def import_codex_session(
     ledger_path: str | Path = "agent-ledger.jsonl",
     agent: str = "codex-cli",
     cwd: str | Path | None = None,
+    policy_path: str | Path | None = None,
 ) -> int:
-    """Import a Codex session JSONL file into the ledger. Returns count of appended events."""
+    """Import a Codex session JSONL file into the ledger. Returns count of appended events.
+
+    When `policy_path` is given, each imported `tool.pre` event is classified
+    against that policy and carries the resulting decision.
+    """
+    from agent_loop.policy import load_policy
+
     p = Path(source_path)
     count = 0
     context = _ImportContext(cwd=normalize_path(cwd) if cwd else None)
+    policy = load_policy(policy_path) if policy_path else None
 
     with p.open("r", encoding="utf-8") as f:
         for lineno, raw in enumerate(f, start=1):
@@ -413,6 +467,7 @@ def import_codex_session(
                 output_call_ids=context.output_call_ids,
             )
             if event is not None:
+                apply_policy_to_event(event, policy)
                 append_event(ledger_path, event)
                 count += 1
 

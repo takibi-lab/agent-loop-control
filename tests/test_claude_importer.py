@@ -146,14 +146,55 @@ def test_assistant_text_and_tool_use_emit_both_events(tmp_path):
 
 def test_unsupported_record_emits_blind_spot(tmp_path):
     session = tmp_path / "s.jsonl"
-    _write(session, [{"type": "file-history-snapshot", "messageId": "m1", "sessionId": "s1"}])
+    _write(session, [{"type": "permission-mode", "permissionMode": "default", "sessionId": "s1"}])
     ledger = tmp_path / "l.jsonl"
 
     import_claude_session(session, ledger_path=ledger)
 
     events = _events(ledger)
     assert events[0]["event_type"] == "blind_spot.declared"
-    assert "file-history-snapshot" in events[0]["blind_spots"][0]
+    assert "permission-mode" in events[0]["blind_spots"][0]
+
+
+def test_metadata_record_types_are_skipped(tmp_path):
+    """Pure transcript bookkeeping records produce no events at all."""
+    session = tmp_path / "s.jsonl"
+    _write(
+        session,
+        [
+            {"type": "file-history-snapshot", "messageId": "m1", "sessionId": "s1"},
+            {"type": "last-prompt", "leafUuid": "x", "sessionId": "s1"},
+            {"type": "ai-title", "aiTitle": "Some title", "sessionId": "s1"},
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_claude_session(session, ledger_path=ledger)
+
+    assert count == 0
+    assert not ledger.exists()
+
+
+def test_import_with_policy_classifies_only_tool_pre(tmp_path, sample_policy_yaml):
+    """A policy file tags imported tool.pre events; other events stay untagged."""
+    session = tmp_path / "s.jsonl"
+    _write(
+        session,
+        [
+            _user("please run the build", cwd="/work"),
+            _assistant(
+                [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git status --short"}}]
+            ),
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    import_claude_session(session, ledger_path=ledger, policy_path=str(sample_policy_yaml))
+
+    by_type = {e["event_type"]: e for e in _events(ledger)}
+    assert by_type["tool.pre"]["policy"]["decision"] == "allow"
+    assert by_type["tool.pre"]["policy"]["rule_id"] == "allow-readonly"
+    assert "policy" not in by_type["prompt.submitted"]
 
 
 def test_path_tool_records_files_array(tmp_path):

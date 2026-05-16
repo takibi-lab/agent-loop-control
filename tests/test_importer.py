@@ -271,6 +271,8 @@ def test_codex_desktop_telemetry_records_are_skipped(tmp_path):
             {"type": "response_item", "payload": {"type": "reasoning", "summary": []}},
             {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}},
             {"type": "event_msg", "payload": {"type": "context_compacted"}},
+            {"type": "event_msg", "payload": {"type": "turn_aborted", "reason": "interrupted"}},
+            {"type": "event_msg", "payload": {"type": "thread_name_updated", "thread_name": "x"}},
             {"type": "compacted", "message": "summary"},
         ],
     )
@@ -280,6 +282,67 @@ def test_codex_desktop_telemetry_records_are_skipped(tmp_path):
 
     assert count == 0
     assert not ledger.exists()
+
+
+def test_item_completed_plan_normalizes_to_recommendation(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {"type": "Plan", "id": "p1", "text": "# Plan\n- step one"},
+                },
+            }
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger)
+
+    assert count == 1
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert events[0]["event_type"] == "recommendation.created"
+    assert "step one" in events[0]["message"]
+
+
+def test_item_completed_unknown_item_type_emits_blind_spot(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [{"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "MysteryItem"}}}],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    import_codex_session(session, ledger_path=ledger)
+
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert events[0]["event_type"] == "blind_spot.declared"
+    assert "MysteryItem" in events[0]["blind_spots"][0]
+
+
+def test_view_image_tool_call_normalizes_to_tool_pre(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "event_msg",
+                "payload": {"type": "view_image_tool_call", "call_id": "v1", "path": "/tmp/x.png"},
+            }
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    count = import_codex_session(session, ledger_path=ledger)
+
+    assert count == 1
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert events[0]["event_type"] == "tool.pre"
+    assert events[0]["tool"]["name"] == "view_image"
+    assert events[0]["tool"]["call_id"] == "v1"
 
 
 def test_codex_desktop_mcp_tool_end_imports_post_event(tmp_path):
@@ -421,6 +484,47 @@ def test_exec_command_end_and_function_call_output_are_not_double_counted(tmp_pa
     assert [e["event_type"] for e in events] == ["tool.pre", "tool.post"]
     assert events[1]["tool"]["exit_code"] == 0
     assert verify_ledger(ledger)["valid"] is True
+
+
+def test_import_with_policy_classifies_only_tool_pre(tmp_path, sample_policy_yaml):
+    """A policy file tags imported tool.pre events; tool.post stays untagged."""
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "c1",
+                "arguments": json.dumps({"cmd": "rm -rf /tmp/x"}),
+            },
+            {"type": "function_call_output", "call_id": "c1", "output": "done"},
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    import_codex_session(session, ledger_path=ledger, policy_path=str(sample_policy_yaml))
+
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert [e["event_type"] for e in events] == ["tool.pre", "tool.post"]
+    assert events[0]["policy"]["decision"] == "deny"
+    assert events[0]["policy"]["risk"] == "critical"
+    assert "policy" not in events[1]
+
+
+def test_import_without_policy_leaves_events_untagged(tmp_path):
+    """Without a policy file imported events carry no policy decision."""
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [{"type": "function_call", "name": "bash", "arguments": {"command": "ls"}}],
+    )
+    ledger = tmp_path / "l.jsonl"
+
+    import_codex_session(session, ledger_path=ledger)
+
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert "policy" not in events[0]
 
 
 def test_malformed_jsonl_emits_blind_spot(tmp_path):

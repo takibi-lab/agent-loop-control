@@ -1,5 +1,7 @@
 """Tests for CLI validation and error reporting."""
 
+import json
+
 from click.testing import CliRunner
 
 from agent_loop.cli import main
@@ -47,6 +49,32 @@ def test_verify_success(tmp_path):
     result = CliRunner().invoke(main, ["verify", str(ledger)])
     assert result.exit_code == 0
     assert "0 events verified" in result.output
+
+
+def test_import_with_policy_file_classifies_tool_pre(tmp_path, sample_policy_yaml):
+    session = tmp_path / "session.jsonl"
+    session.write_text(
+        json.dumps(
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "rm -rf /tmp/x"}),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ledger = tmp_path / "ledger.jsonl"
+
+    result = CliRunner().invoke(
+        main,
+        ["import", str(session), "--ledger", str(ledger), "--policy-file", str(sample_policy_yaml)],
+    )
+
+    assert result.exit_code == 0
+    assert "Imported 1 events" in result.output
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert events[0]["policy"]["decision"] == "deny"
 
 
 def test_search_file_path_matches_tool_input(tmp_path):

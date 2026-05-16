@@ -73,7 +73,14 @@ def _collect_policy_values(value: Any, *, keys: set[str], join_lists: bool = Fal
     return list(dict.fromkeys(values))
 
 
-def _classify_event(policy: dict, event: dict) -> dict[str, Any]:
+def classify_event(policy: dict, event: dict) -> dict[str, Any]:
+    """Classify a normalized tool event against a policy.
+
+    Reads the tool name, command, and file paths from the event's ``tool``
+    block and returns the strongest matching policy decision
+    (decision/risk/rule_id/rationale). Shared by the hook collector and the
+    session importers.
+    """
     from agent_loop.policy import classify_action
 
     tool = event.get("tool", {}) if isinstance(event.get("tool"), dict) else {}
@@ -100,6 +107,26 @@ def _classify_event(policy: dict, event: dict) -> dict[str, Any]:
             candidates.append(classify_action(policy, tool=tool_name, command=command, path=path))
 
     return min(candidates, key=lambda result: _DECISION_PRECEDENCE.get(result["decision"], 1))
+
+
+def apply_policy_to_event(event: dict[str, Any], policy: dict | None) -> dict[str, Any]:
+    """Attach a policy decision to an imported ``tool.pre`` event, in place.
+
+    Only ``tool.pre`` events represent an approval decision point, so other
+    event types are left untouched (classifying them would attach a meaningless
+    default decision and distort the analyzer's approval counts). Returns the
+    same event for convenience.
+    """
+    if policy is None or event.get("event_type") != "tool.pre":
+        return event
+    decision = classify_event(policy, event)
+    event["policy"] = {
+        "decision": decision["decision"],
+        "risk": decision["risk"],
+        "rule_id": decision["rule_id"],
+        "rationale": decision["rationale"],
+    }
+    return event
 
 
 def _extract_tool_data(hook_data: dict) -> dict[str, Any]:
@@ -227,7 +254,7 @@ def collect_hook_event(
         policy = load_policy(policy_path)
         patterns = load_redaction_patterns(policy)
 
-        decision = _classify_event(policy, event)
+        decision = classify_event(policy, event)
         event["policy"] = {
             "decision": decision["decision"],
             "risk": decision["risk"],

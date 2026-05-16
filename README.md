@@ -156,6 +156,16 @@ agent-loop import ~/.claude/projects/<project>/<session-id>.jsonl \
   --ledger ~/.agent-loop/ledger.jsonl
 ```
 
+Pass `--policy-file` to classify imported `tool.pre` events against a policy, so
+`agent-loop analyze` can report approval fatigue for imported history as well as
+for live hook events:
+
+```bash
+agent-loop import ~/.codex/sessions/<session-file>.jsonl \
+  --ledger ~/.agent-loop/ledger.jsonl \
+  --policy-file ~/.agent-loop/agent-policy.yaml
+```
+
 ## Claude Code Hooks
 
 The sample Claude Code hook configuration is in
@@ -193,6 +203,7 @@ agent-loop policy check [agent-policy.yaml]
 agent-loop policy classify --tool Bash --command "git status" --policy-file agent-policy.yaml
 agent-loop hook collect --ledger agent-ledger.jsonl --policy-file agent-policy.yaml
 agent-loop import <codex-session.jsonl> --ledger agent-ledger.jsonl --agent codex-cli
+agent-loop import <session.jsonl> --ledger agent-ledger.jsonl --policy-file agent-policy.yaml
 agent-loop snapshot --ledger agent-ledger.jsonl --repo .
 agent-loop verify agent-ledger.jsonl
 agent-loop timeline agent-ledger.jsonl --limit 50 --repo .

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent_loop.collector import apply_policy_to_event
 from agent_loop.ledger import append_event, build_event
 from agent_loop.repo_context import normalize_path, resolve_repo_context
 
@@ -27,6 +28,23 @@ _BLIND_SPOTS = [
 
 # Keys that reliably appear in Claude Code transcripts but never in Codex JSONL.
 _CLAUDE_MARKER_KEYS = {"parentUuid", "isSidechain", "sessionId", "uuid", "leafUuid", "gitBranch"}
+
+# Transcript bookkeeping records that carry no agent tool activity (session
+# titles, file backup snapshots, prompt pointers, queue plumbing). They are
+# skipped silently, like Codex telemetry records, so they do not inflate
+# blind-spot counts in the analyzer's import-visibility report. Record types
+# that sit closer to real activity (system, attachment, permission-mode,
+# pr-link) are still declared as blind spots until the importer handles them.
+_IGNORED_CLAUDE_TYPES = {
+    "agent-name",
+    "ai-title",
+    "custom-title",
+    "file-history-snapshot",
+    "last-prompt",
+    "queue-operation",
+    "queued-command",
+    "summary",
+}
 
 # Tools whose input names a file; used to populate the event `files` array.
 _PATH_TOOL_OPERATIONS = {
@@ -203,6 +221,8 @@ def _normalize_claude_record(
 ) -> list[dict[str, Any]]:
     """Normalize one Claude Code transcript record to zero or more ledger events."""
     rtype = record.get("type")
+    if rtype in _IGNORED_CLAUDE_TYPES:
+        return []
     session_id = record.get("sessionId") or context.session_id
     cwd = normalize_path(record["cwd"]) if record.get("cwd") else context.cwd
     repo_extra = _repo_extra(cwd, context.repo_cache)
@@ -277,9 +297,9 @@ def _normalize_claude_record(
             )
         return _attribute(events, sub_agent)
 
-    # Any other record type (system, attachment, file-history-snapshot,
-    # last-prompt, permission-mode, ai-title, pr-link, ...) carries no agent
-    # tool activity and is recorded as an explicit blind spot.
+    # Any other record type (system, attachment, permission-mode, pr-link, ...)
+    # is not yet normalized and is recorded as an explicit blind spot. Pure
+    # bookkeeping types are filtered earlier via _IGNORED_CLAUDE_TYPES.
     events.append(
         build_event(
             "blind_spot.declared",
@@ -314,6 +334,7 @@ def _import_claude_file(
     context: _ClaudeContext,
     *,
     sub_agent: dict[str, Any] | None = None,
+    policy: dict[str, Any] | None = None,
 ) -> int:
     count = 0
     with source_path.open("r", encoding="utf-8") as f:
@@ -349,6 +370,7 @@ def _import_claude_file(
                     context.cwd = normalize_path(record["cwd"])
 
             for event in _normalize_claude_record(record, agent, context, sub_agent=sub_agent):
+                apply_policy_to_event(event, policy)
                 append_event(ledger_path, event)
                 count += 1
 
@@ -383,17 +405,22 @@ def import_claude_session(
     agent: str = "claude-code",
     cwd: str | Path | None = None,
     include_subagents: bool = True,
+    policy_path: str | Path | None = None,
 ) -> int:
     """Import a Claude Code session transcript into the ledger.
 
     Recurses into ``<session-id>/subagents/*.jsonl`` siblings when present and
-    attributes those events back to the parent session. Returns the count of
-    appended events.
+    attributes those events back to the parent session. When `policy_path` is
+    given, each imported `tool.pre` event is classified against that policy.
+    Returns the count of appended events.
     """
+    from agent_loop.policy import load_policy
+
     p = Path(source_path)
     context = _ClaudeContext(cwd=normalize_path(cwd) if cwd else None)
+    policy = load_policy(policy_path) if policy_path else None
 
-    count = _import_claude_file(p, ledger_path, agent, context)
+    count = _import_claude_file(p, ledger_path, agent, context, policy=policy)
 
     if include_subagents:
         sub_dir = p.parent / p.stem / "subagents"
@@ -406,6 +433,7 @@ def import_claude_session(
                     agent,
                     context,
                     sub_agent=sub_agent,
+                    policy=policy,
                 )
 
     return count
