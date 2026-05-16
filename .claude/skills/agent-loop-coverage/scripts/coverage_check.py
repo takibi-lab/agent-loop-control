@@ -180,6 +180,11 @@ def main() -> int:
         return 2
 
     ledger_path = args.keep_ledger or os.path.join(tempfile.mkdtemp(), "coverage-ledger.jsonl")
+    # The importer always appends. A leftover ledger from a previous run (most
+    # likely a reused --keep-ledger path) would otherwise be tallied as if it
+    # were this run's coverage, and the hash chain would still verify OK -- so
+    # start every run from an empty ledger.
+    Path(ledger_path).unlink(missing_ok=True)
     imported, failures = build_ledger(sessions, ledger_path, policy_file)
     chain_ok = bool(verify_ledger(ledger_path).get("valid")) if Path(ledger_path).exists() else False
     summary = summarize(ledger_path) if Path(ledger_path).exists() else {

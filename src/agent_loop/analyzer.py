@@ -20,7 +20,10 @@ def _action_key(event: dict) -> str:
     tool = event.get("tool", {})
     if isinstance(tool, dict):
         name = tool.get("name", "")
-        cmd = tool.get("command") or tool.get("input_summary") or ""
+        # Only a real shell command is grouped as `cmd:`. `input_summary` is the
+        # raw tool input for non-shell tools (patch text, JSON), so using it as a
+        # fallback would surface noise like `cmd:*** Begin` as a policy candidate.
+        cmd = tool.get("command") or ""
         if cmd:
             words = cmd.split()
             return "cmd:" + " ".join(words[:2])
