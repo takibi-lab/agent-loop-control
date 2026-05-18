@@ -104,6 +104,35 @@ def test_low_risk_repeated_asks_become_improvement_candidates(tmp_path):
     assert "cmd:git status  (asked 2 times)" in report
 
 
+def test_non_shell_tool_input_is_not_grouped_as_a_command(tmp_path):
+    """Non-shell tool input groups as `tool:{name}`, never a bogus `cmd:` key."""
+    ledger = tmp_path / "ledger.jsonl"
+    patch_text = "*** Begin Patch\n*** Update File: src/x.py"
+    for _ in range(2):
+        append_event(
+            ledger,
+            build_event(
+                "tool.pre",
+                "codex-cli",
+                extra={
+                    "tool": {"name": "apply_patch", "input_summary": patch_text},
+                    "policy": {
+                        "decision": "ask",
+                        "risk": "low",
+                        "rule_id": "test",
+                        "rationale": "test fixture",
+                    },
+                },
+            ),
+        )
+
+    report = analyze_approvals(ledger)
+
+    assert "tool:apply_patch" in report
+    assert "- tool:apply_patch  (asked 2 times)" in report
+    assert "cmd:" not in report
+
+
 def test_repeated_failures_are_reported(tmp_path):
     """Actions failing twice or more appear in the repeated failure section."""
     ledger = tmp_path / "ledger.jsonl"
