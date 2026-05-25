@@ -105,7 +105,11 @@ def test_low_risk_repeated_asks_become_improvement_candidates(tmp_path):
 
 
 def test_non_shell_tool_input_is_not_grouped_as_a_command(tmp_path):
-    """Non-shell tool input groups as `tool:{name}`, never a bogus `cmd:` key."""
+    """Non-shell tool input groups as `tool:{name}`, never a bogus `cmd:` key.
+
+    Uses a legacy fixture (no ``tool.kind``) to also pin down the
+    ``derive_kind()`` heuristic that backfills pre-#31 ledgers.
+    """
     ledger = tmp_path / "ledger.jsonl"
     patch_text = "*** Begin Patch\n*** Update File: src/x.py"
     for _ in range(2):
@@ -129,6 +133,37 @@ def test_non_shell_tool_input_is_not_grouped_as_a_command(tmp_path):
     report = analyze_approvals(ledger)
 
     assert "tool:apply_patch" in report
+    assert "- tool:apply_patch  (asked 2 times)" in report
+    assert "cmd:" not in report
+
+
+def test_explicit_structured_kind_is_not_grouped_as_a_command(tmp_path):
+    """``tool.kind == "structured"`` is honored even when a stray command is present."""
+    ledger = tmp_path / "ledger.jsonl"
+    for _ in range(2):
+        append_event(
+            ledger,
+            build_event(
+                "tool.pre",
+                "codex-cli",
+                extra={
+                    "tool": {
+                        "name": "apply_patch",
+                        "kind": "structured",
+                        "input_summary": "*** Begin Patch",
+                    },
+                    "policy": {
+                        "decision": "ask",
+                        "risk": "low",
+                        "rule_id": "test",
+                        "rationale": "test fixture",
+                    },
+                },
+            ),
+        )
+
+    report = analyze_approvals(ledger)
+
     assert "- tool:apply_patch  (asked 2 times)" in report
     assert "cmd:" not in report
 

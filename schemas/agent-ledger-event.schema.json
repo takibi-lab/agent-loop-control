@@ -109,6 +109,11 @@
         "name": {
           "type": "string"
         },
+        "kind": {
+          "type": "string",
+          "enum": ["shell", "structured"],
+          "description": "Disambiguates a shell command ('shell', backed by tool.command) from structured tool input ('structured', backed by tool.input_full / tool.input_summary). Set by importers and the hook collector at ingest time; may be missing on legacy records, where readers infer it via tool_kind.derive_kind()."
+        },
         "input_summary": {
           "type": "string"
         },

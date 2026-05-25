@@ -82,21 +82,21 @@ def classify_event(policy: dict, event: dict) -> dict[str, Any]:
     session importers.
     """
     from agent_loop.policy import classify_action
+    from agent_loop.tool_kind import is_shell
 
     tool = event.get("tool", {}) if isinstance(event.get("tool"), dict) else {}
     tool_name = tool.get("name") if isinstance(tool, dict) else None
     tool_input = tool.get("input_full") if isinstance(tool, dict) else None
 
-    commands = []
-    if isinstance(tool, dict):
-        commands.extend(
-            cmd
-            for cmd in [
-                _stringify_command(tool.get("command")),
-                _stringify_command(tool.get("input_summary")),
-            ]
-            if cmd
-        )
+    # Route the command candidate list through ``kind`` so we never feed a
+    # structured tool's truncated JSON ``input_summary`` to the prefix matcher
+    # (Issue #31). Shell tools contribute ``tool.command``; structured tools
+    # rely on the deep walk of ``input_full`` below.
+    commands: list[str] = []
+    if isinstance(tool, dict) and is_shell(tool):
+        cmd = _stringify_command(tool.get("command"))
+        if cmd:
+            commands.append(cmd)
     commands.extend(_collect_policy_values(tool_input, keys=_COMMAND_KEYS, join_lists=True))
 
     paths = _collect_policy_values(tool_input, keys=_PATH_KEYS)
@@ -148,10 +148,13 @@ def _extract_tool_data(hook_data: dict) -> dict[str, Any]:
             if cmd:
                 tool_data["command"] = cmd
                 tool_data["input_summary"] = cmd[:200]
+                tool_data["kind"] = "shell"
             else:
                 tool_data["input_summary"] = json.dumps(tool_input, ensure_ascii=False)[:200]
+                tool_data["kind"] = "structured"
         else:
             tool_data["input_summary"] = str(tool_input)[:200]
+            tool_data["kind"] = "structured"
     return tool_data
 
 

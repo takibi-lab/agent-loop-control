@@ -51,6 +51,33 @@ def test_tool_use_block_normalizes_to_tool_pre(tmp_path):
     assert events[0]["tool"]["name"] == "Bash"
     assert events[0]["tool"]["call_id"] == "t1"
     assert events[0]["tool"]["command"] == "ls -la"
+    assert events[0]["tool"]["kind"] == "shell"
+
+
+def test_structured_tool_use_is_marked_structured(tmp_path):
+    session = tmp_path / "s.jsonl"
+    _write(
+        session,
+        [
+            _assistant(
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "t2",
+                        "name": "Write",
+                        "input": {"file_path": "pyproject.toml", "content": "x"},
+                    }
+                ]
+            )
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+    import_claude_session(session, ledger_path=ledger)
+
+    events = _events(ledger)
+    assert events[0]["tool"]["kind"] == "structured"
+    assert "command" not in events[0]["tool"]
+    assert events[0]["tool"]["input_full"]["file_path"] == "pyproject.toml"
 
 
 def test_tool_result_block_normalizes_to_tool_post(tmp_path):

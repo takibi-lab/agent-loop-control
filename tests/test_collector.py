@@ -17,7 +17,21 @@ def test_pre_tool_use_normalizes_to_tool_pre(tmp_path):
     assert event["event_type"] == "tool.pre"
     assert event["tool"]["name"] == "Bash"
     assert event["tool"]["command"] == "ls -la"
+    assert event["tool"]["kind"] == "shell"
     assert event["tool"]["input_full"] == {"command": "ls -la"}
+
+
+def test_pre_tool_use_marks_structured_tool_input(tmp_path):
+    ledger = tmp_path / "l.jsonl"
+    payload = _make_hook(
+        "PreToolUse",
+        tool_name="Write",
+        tool_input={"file_path": "pyproject.toml", "content": "safe=value"},
+    )
+    event = collect_hook_event(payload, ledger_path=ledger)
+    assert event["tool"]["kind"] == "structured"
+    assert "command" not in event["tool"]
+    assert event["tool"]["input_full"]["file_path"] == "pyproject.toml"
 
 
 def test_post_tool_use_normalizes_to_tool_post(tmp_path):

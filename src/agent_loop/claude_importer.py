@@ -185,8 +185,10 @@ def _tool_use_event(
     if isinstance(command, str) and command:
         tool_data["command"] = command
         tool_data["input_summary"] = command[:200]
+        tool_data["kind"] = "shell"
     elif tool_input:
         tool_data["input_summary"] = _truncate(tool_input)
+        tool_data["kind"] = "structured"
     if isinstance(tool_input, dict):
         tool_data["input_full"] = tool_input
 

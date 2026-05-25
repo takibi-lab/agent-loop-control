@@ -167,8 +167,10 @@ def _tool_call_data(record: dict[str, Any]) -> tuple[dict[str, Any], str | None]
     if command:
         tool_data["command"] = command
         tool_data["input_summary"] = command[:200]
+        tool_data["kind"] = "shell"
     elif args:
         tool_data["input_summary"] = _truncate(args)
+        tool_data["kind"] = "structured"
 
     return tool_data, cwd
 
