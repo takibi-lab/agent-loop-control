@@ -19,6 +19,7 @@ from typing import Any
 from agent_loop.collector import apply_policy_to_event
 from agent_loop.ledger import append_event, build_event
 from agent_loop.repo_context import normalize_path, resolve_repo_context
+from agent_loop.tool_kind import set_shell, set_structured
 
 _BLIND_SPOTS = [
     "Hidden model reasoning (thinking blocks) is not captured.",
@@ -181,17 +182,22 @@ def _tool_use_event(
     if call_id:
         tool_data["call_id"] = str(call_id)
 
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    input_full = tool_input if isinstance(tool_input, dict) else None
+    command = input_full.get("command") if input_full is not None else None
     if isinstance(command, str) and command:
-        tool_data["command"] = command
-        tool_data["input_summary"] = command[:200]
+        set_shell(tool_data, command, input_full=input_full)
     elif tool_input:
-        tool_data["input_summary"] = _truncate(tool_input)
-    if isinstance(tool_input, dict):
-        tool_data["input_full"] = tool_input
+        set_structured(
+            tool_data, input_summary=_truncate(tool_input), input_full=input_full
+        )
 
     if call_id:
-        context.tool_calls[str(call_id)] = {"name": name} if name else {}
+        remembered: dict[str, Any] = {}
+        if name:
+            remembered["name"] = name
+        if "kind" in tool_data:
+            remembered["kind"] = tool_data["kind"]
+        context.tool_calls[str(call_id)] = remembered
 
     extra: dict[str, Any] = {"tool": tool_data, **repo_extra}
     files = _files_for_tool(name, tool_input)
@@ -225,6 +231,11 @@ def _tool_result_event(
         tool_data["name"] = name
     if call_id:
         tool_data["call_id"] = str(call_id)
+    # Propagate ``kind`` from the matching tool_use so analyzer / timeline can
+    # branch the same way on post/error events as on pre events (Codex copies
+    # the whole call dict to its cache; this keeps Claude Code symmetric).
+    if "kind" in remembered:
+        tool_data["kind"] = remembered["kind"]
 
     is_error = bool(block.get("is_error"))
     tool_data["success"] = not is_error

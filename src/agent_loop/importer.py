@@ -15,6 +15,7 @@ from typing import Any
 from agent_loop.collector import apply_policy_to_event
 from agent_loop.ledger import append_event, build_event
 from agent_loop.repo_context import normalize_path, resolve_repo_context
+from agent_loop.tool_kind import set_shell, set_structured
 
 _BLIND_SPOTS = [
     "Hidden model reasoning is not captured.",
@@ -164,11 +165,11 @@ def _tool_call_data(record: dict[str, Any]) -> tuple[dict[str, Any], str | None]
         tool_data["call_id"] = str(call_id)
 
     command = _extract_tool_command(args)
+    input_full = args if isinstance(args, dict) else None
     if command:
-        tool_data["command"] = command
-        tool_data["input_summary"] = command[:200]
+        set_shell(tool_data, command, input_full=input_full)
     elif args:
-        tool_data["input_summary"] = _truncate(args)
+        set_structured(tool_data, input_summary=_truncate(args), input_full=input_full)
 
     return tool_data, cwd
 
@@ -271,7 +272,12 @@ def _normalize_codex_record(
             cwd = tool_cwd
         call_id = tool_data.get("call_id")
         if isinstance(call_id, str):
-            tool_calls[call_id] = {k: v for k, v in tool_data.items() if k != "input_summary"}
+            # Cache only the identifying / classifying fields so tool.post
+            # events stay lean: ``input_summary`` and ``input_full`` belong to
+            # the pre side (the call's input), while ``name`` / ``kind`` /
+            # ``command`` / ``call_id`` describe the call itself.
+            _post_skip = {"input_summary", "input_full"}
+            tool_calls[call_id] = {k: v for k, v in tool_data.items() if k not in _post_skip}
 
         return build_event(
             "tool.pre",

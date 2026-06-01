@@ -155,3 +155,57 @@ def test_search_command_predicate_still_matches_input_json(tmp_path):
     assert "1 event(s) matched" in result.output
     # Matched on input JSON, but the display still hides that JSON.
     assert "cmd={" not in result.output
+
+
+def test_timeline_multi_path_tool_shows_suffix_count(tmp_path):
+    """Multi-file structured tools (MultiEdit / apply_patch) surface
+    ``path=first (+N)`` so the timeline reader doesn't mistake the first file
+    for the full scope.
+    """
+    ledger = tmp_path / "l.jsonl"
+    append_event(
+        ledger,
+        build_event(
+            "tool.pre",
+            "claude-code",
+            extra={
+                "tool": {
+                    "name": "MultiEdit",
+                    "kind": "structured",
+                    "input_full": {"paths": ["a.py", "b.py", "c.py"], "edits": []},
+                }
+            },
+        ),
+    )
+
+    result = CliRunner().invoke(main, ["timeline", str(ledger)])
+
+    assert result.exit_code == 0
+    assert "path=a.py (+2)" in result.output
+
+
+def test_timeline_respects_explicit_structured_kind(tmp_path):
+    """``tool.kind == "structured"`` suppresses ``cmd=`` even if a command field leaks in."""
+    ledger = tmp_path / "l.jsonl"
+    append_event(
+        ledger,
+        build_event(
+            "tool.pre",
+            "claude-code",
+            extra={
+                "tool": {
+                    "name": "Write",
+                    "kind": "structured",
+                    "input_full": {"file_path": "pyproject.toml"},
+                    "input_summary": '{"file_path": "pyproject.toml"}',
+                }
+            },
+        ),
+    )
+
+    result = CliRunner().invoke(main, ["timeline", str(ledger)])
+
+    assert result.exit_code == 0
+    assert "tool=Write" in result.output
+    assert "path=pyproject.toml" in result.output
+    assert "cmd=" not in result.output

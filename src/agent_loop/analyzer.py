@@ -9,6 +9,7 @@ from pathlib import Path
 
 from agent_loop.ledger_reader import filter_events, load_events
 from agent_loop.repo_context import repo_label
+from agent_loop.tool_kind import shell_command
 
 
 def _action_key(event: dict) -> str:
@@ -20,10 +21,10 @@ def _action_key(event: dict) -> str:
     tool = event.get("tool", {})
     if isinstance(tool, dict):
         name = tool.get("name", "")
-        # Only a real shell command is grouped as `cmd:`. `input_summary` is the
-        # raw tool input for non-shell tools (patch text, JSON), so using it as a
-        # fallback would surface noise like `cmd:*** Begin` as a policy candidate.
-        cmd = tool.get("command") or ""
+        # Only a real shell command is grouped as `cmd:`; ``shell_command()``
+        # returns "" for structured tools so patch bodies / JSON input never
+        # leak in as ``cmd:*** Begin`` (Issue #31, originally PR #25).
+        cmd = shell_command(tool)
         if cmd:
             words = cmd.split()
             return "cmd:" + " ".join(words[:2])
@@ -115,7 +116,7 @@ def _tool_hygiene_section(events: list[dict]) -> list[str]:
         if e.get("event_type") == "tool.pre":
             if name == "Bash":
                 bash_total += 1
-                verb = _bash_primary_verb(str(tool.get("command") or ""))
+                verb = _bash_primary_verb(shell_command(tool))
                 if verb in _NATIVE_TOOL_SHELL_VERBS:
                     bash_replaceable[verb] += 1
             elif name == "Agent" and sid:

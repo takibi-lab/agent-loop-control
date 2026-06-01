@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 
 from agent_loop.ledger_reader import filter_events, load_events
+from agent_loop.tool_kind import search_haystack, shell_command
 from agent_loop.verifier import verify_ledger
 
 
@@ -26,18 +27,21 @@ def _summarize(event: dict) -> str:
         name = tool.get("name", "")
         if name:
             parts.append(f"tool={name}")
-        # Only a real shell `command` is rendered as `cmd=`. Non-shell tools
-        # (Write/Read/Edit/apply_patch/...) have no command, so falling back to
-        # `input_summary` would print raw tool-input JSON as if it were a shell
-        # command. Surface the affected file path instead, matching the
-        # `analyzer._action_key()` fix in PR #25.
-        cmd = tool.get("command") or ""
+        # Only a real shell command is rendered as ``cmd=``. ``shell_command()``
+        # returns "" for structured tools so raw input JSON never leaks into
+        # the display as ``cmd={...}`` (Issue #31 / PR #28). For structured
+        # tools we surface the affected file path instead.
+        cmd = shell_command(tool)
         if cmd:
             parts.append(f"cmd={cmd[:60]}")
         else:
             paths = _path_values(tool)
             if paths:
-                parts.append(f"path={_clip(paths[0])}")
+                # Surface the first path plus an `(+N)` suffix so multi-file
+                # tools (MultiEdit, apply_patch over several files) don't get
+                # silently summarized down to a single filename.
+                suffix = f" (+{len(paths) - 1})" if len(paths) > 1 else ""
+                parts.append(f"path={_clip(paths[0])}{suffix}")
 
     policy = event.get("policy", {})
     if isinstance(policy, dict) and policy.get("decision"):
@@ -121,14 +125,13 @@ def print_search(
             if not isinstance(policy, dict) or policy.get("decision") != decision:
                 continue
         if command:
-            # `--command` is a search predicate, not a display field: it still
-            # matches `input_summary` so the raw tool-input JSON (e.g. Write
-            # content) stays searchable. The display itself is handled by
-            # `_summarize()`, which no longer renders that JSON as `cmd=`.
+            # ``--command`` is a search predicate, not a display field:
+            # ``search_haystack()`` exposes the raw structured ``input_summary``
+            # for non-shell tools so queries like ``--command "Begin Patch"``
+            # still hit a patch body. Display is gated separately by
+            # ``_summarize()`` so the same text is never rendered as ``cmd=``.
             tool = event.get("tool", {})
-            cmd_val = ""
-            if isinstance(tool, dict):
-                cmd_val = tool.get("command") or tool.get("input_summary") or ""
+            cmd_val = search_haystack(tool) if isinstance(tool, dict) else ""
             if command.lower() not in cmd_val.lower():
                 continue
         if file_path:

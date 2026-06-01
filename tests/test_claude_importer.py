@@ -51,6 +51,62 @@ def test_tool_use_block_normalizes_to_tool_pre(tmp_path):
     assert events[0]["tool"]["name"] == "Bash"
     assert events[0]["tool"]["call_id"] == "t1"
     assert events[0]["tool"]["command"] == "ls -la"
+    assert events[0]["tool"]["kind"] == "shell"
+
+
+def test_structured_tool_result_carries_structured_kind(tmp_path):
+    """tool.post / tool.error inherit ``kind`` from the matching tool_use so
+    analyzer / timeline see the same shape on both sides of a call.
+    """
+    session = tmp_path / "s.jsonl"
+    _write(
+        session,
+        [
+            _assistant(
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "t2",
+                        "name": "Write",
+                        "input": {"file_path": "x.py", "content": "y"},
+                    }
+                ]
+            ),
+            _user([{"type": "tool_result", "tool_use_id": "t2", "content": "ok"}]),
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+    import_claude_session(session, ledger_path=ledger)
+
+    events = _events(ledger)
+    assert events[1]["event_type"] == "tool.post"
+    assert events[1]["tool"]["kind"] == "structured"
+
+
+def test_structured_tool_use_is_marked_structured(tmp_path):
+    session = tmp_path / "s.jsonl"
+    _write(
+        session,
+        [
+            _assistant(
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "t2",
+                        "name": "Write",
+                        "input": {"file_path": "pyproject.toml", "content": "x"},
+                    }
+                ]
+            )
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+    import_claude_session(session, ledger_path=ledger)
+
+    events = _events(ledger)
+    assert events[0]["tool"]["kind"] == "structured"
+    assert "command" not in events[0]["tool"]
+    assert events[0]["tool"]["input_full"]["file_path"] == "pyproject.toml"
 
 
 def test_tool_result_block_normalizes_to_tool_post(tmp_path):
@@ -65,7 +121,14 @@ def test_tool_result_block_normalizes_to_tool_post(tmp_path):
 
     events = _events(ledger)
     assert [e["event_type"] for e in events] == ["tool.pre", "tool.post"]
-    assert events[1]["tool"] == {"name": "Bash", "call_id": "t1", "success": True}
+    # Post events carry ``kind`` so analyzer / timeline see the same shape on
+    # both sides of a call (mirrors the Codex importer cache propagation).
+    assert events[1]["tool"] == {
+        "name": "Bash",
+        "call_id": "t1",
+        "success": True,
+        "kind": "shell",
+    }
 
 
 def test_tool_result_error_normalizes_to_tool_error(tmp_path):

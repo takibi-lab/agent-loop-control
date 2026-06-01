@@ -48,6 +48,60 @@ def test_function_call_normalizes_to_tool_pre(tmp_path):
     events = [json.loads(l) for l in ledger.read_text().splitlines()]
     assert events[0]["event_type"] == "tool.pre"
     assert events[0]["tool"]["command"] == "ls -la"
+    assert events[0]["tool"]["kind"] == "shell"
+
+
+def test_function_call_without_command_is_marked_structured(tmp_path):
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "function_call",
+                "name": "apply_patch",
+                "arguments": {"patch": "*** Begin Patch\n*** End Patch"},
+            }
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+    import_codex_session(session, ledger_path=ledger)
+
+    events = [json.loads(l) for l in ledger.read_text().splitlines()]
+    assert events[0]["tool"]["kind"] == "structured"
+    assert "command" not in events[0]["tool"]
+    # ``input_full`` preserves the raw args dict so policy ``_COMMAND_KEYS`` /
+    # path-key deep walks reach Codex structured tools too (without this,
+    # apply_patch silently drops out of prefix-based policy matching).
+    assert events[0]["tool"]["input_full"] == {
+        "patch": "*** Begin Patch\n*** End Patch"
+    }
+
+
+def test_codex_structured_tool_input_full_feeds_policy_classification(
+    tmp_path, sample_policy_yaml
+):
+    """Codex structured tools (apply_patch / custom_tool_call) must reach the
+    path-based policy rules via ``input_full`` deep walk — pre-fix the importer
+    skipped ``input_full`` so apply_patch over ``.env`` slipped past
+    ``deny-sensitive``.
+    """
+    session = tmp_path / "session.jsonl"
+    _write_session(
+        session,
+        [
+            {
+                "type": "function_call",
+                "name": "apply_patch",
+                "arguments": {"file_path": ".env", "patch": "..."},
+            }
+        ],
+    )
+    ledger = tmp_path / "l.jsonl"
+    import_codex_session(session, ledger_path=ledger, policy_path=sample_policy_yaml)
+
+    events = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert events[0]["policy"]["decision"] == "deny"
+    assert events[0]["policy"]["rule_id"] == "deny-sensitive"
 
 
 def test_function_call_with_json_string_arguments_normalizes_command(tmp_path):
@@ -165,6 +219,8 @@ def test_codex_desktop_payload_wrapper_imports_tool_events(tmp_path):
         "call_id": "call-1",
         "command": "git status",
         "input_summary": "git status",
+        "kind": "shell",
+        "input_full": {"cmd": "git status", "yield_time_ms": 1000},
     }
     assert events[0]["repo"] == {
         "root": str(repo),
@@ -178,6 +234,7 @@ def test_codex_desktop_payload_wrapper_imports_tool_events(tmp_path):
         "call_id": "call-1",
         "command": "git status",
         "success": True,
+        "kind": "shell",
     }
 
 
@@ -259,6 +316,7 @@ def test_codex_desktop_custom_tool_output_uses_metadata(tmp_path):
         "call_id": "patch-1",
         "exit_code": 0,
         "success": True,
+        "kind": "structured",
     }
 
 
