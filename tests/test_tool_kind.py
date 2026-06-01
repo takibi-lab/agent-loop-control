@@ -28,6 +28,11 @@ from agent_loop.tool_kind import (
         ({"command": "git status"}, SHELL),
         ({"input_summary": "{\"file_path\": \"x\"}"}, STRUCTURED),
         ({"input_full": {"file_path": "x"}}, STRUCTURED),
+        # Field presence (not truthiness) must drive the heuristic — an importer
+        # that deliberately recorded an empty structured payload should still
+        # land in STRUCTURED, not the unknown bucket.
+        ({"input_full": {}}, STRUCTURED),
+        ({"input_summary": ""}, STRUCTURED),
         ({"name": "Bash"}, None),
         ({}, None),
         ({"command": ""}, None),

@@ -22,9 +22,14 @@ def derive_kind(tool: dict[str, Any]) -> str | None:
     """Return ``tool.kind``, inferring it for legacy records.
 
     Honors an explicit ``kind`` when present. Otherwise: a string ``command``
-    means :data:`SHELL`, any structured payload (``input_full`` or
-    ``input_summary``) means :data:`STRUCTURED`, and a tool block with neither
-    returns ``None`` so callers can treat it as unknown.
+    means :data:`SHELL`, the *presence* of any structured payload key
+    (``input_full`` or ``input_summary``) means :data:`STRUCTURED`, and a tool
+    block with neither returns ``None`` so callers can treat it as unknown.
+
+    The structured branch uses ``in`` rather than truthiness so an explicitly
+    empty payload (``input_full={}`` or ``input_summary=""``) is still
+    classified — the field was set deliberately by an importer, just with no
+    data, and falling through to ``None`` would silently demote it to unknown.
     """
     if not isinstance(tool, dict):
         return None
@@ -34,7 +39,7 @@ def derive_kind(tool: dict[str, Any]) -> str | None:
     command = tool.get("command")
     if isinstance(command, str) and command:
         return SHELL
-    if tool.get("input_full") or tool.get("input_summary"):
+    if "input_full" in tool or "input_summary" in tool:
         return STRUCTURED
     return None
 
@@ -73,8 +78,45 @@ def search_haystack(tool: dict[str, Any]) -> str:
     """
     if not isinstance(tool, dict):
         return ""
-    if is_shell(tool):
-        command = tool.get("command")
-        return command if isinstance(command, str) else ""
+    cmd = shell_command(tool)
+    if cmd:
+        return cmd
     summary = tool.get("input_summary")
     return summary if isinstance(summary, str) else ""
+
+
+def set_shell(
+    tool_data: dict[str, Any],
+    command: str,
+    *,
+    input_full: dict[str, Any] | None = None,
+) -> None:
+    """Stamp ``tool_data`` as a shell tool: command + truncated summary + kind.
+
+    ``input_full`` is set when callers have a structured args dict to preserve
+    (used by Claude Code / hook payloads); session importers without one can
+    omit it. Importers must still set ``name`` / ``call_id`` themselves.
+    """
+    tool_data["command"] = command
+    tool_data["input_summary"] = command[:200]
+    tool_data["kind"] = SHELL
+    if input_full is not None:
+        tool_data["input_full"] = input_full
+
+
+def set_structured(
+    tool_data: dict[str, Any],
+    *,
+    input_summary: str,
+    input_full: dict[str, Any] | None = None,
+) -> None:
+    """Stamp ``tool_data`` as a structured tool: summary + optional full + kind.
+
+    ``input_summary`` is caller-truncated because each importer has a different
+    truncation rule (``_truncate`` for session importers,
+    ``json.dumps(..., ensure_ascii=False)[:200]`` for the hook collector).
+    """
+    tool_data["input_summary"] = input_summary
+    tool_data["kind"] = STRUCTURED
+    if input_full is not None:
+        tool_data["input_full"] = input_full

@@ -10,6 +10,7 @@ from typing import Any
 
 from agent_loop.ledger import append_event, build_event
 from agent_loop.repo_context import normalize_path, resolve_repo_context
+from agent_loop.tool_kind import set_shell, set_structured
 
 _HOOK_TO_EVENT_TYPE = {
     "UserPromptSubmit": "prompt.submitted",
@@ -143,18 +144,17 @@ def _extract_tool_data(hook_data: dict) -> dict[str, Any]:
     tool_input = hook_data.get("tool_input") or hook_data.get("toolInput")
     if tool_input:
         if isinstance(tool_input, dict):
-            tool_data["input_full"] = tool_input
             cmd = _stringify_command(tool_input.get("command"))
             if cmd:
-                tool_data["command"] = cmd
-                tool_data["input_summary"] = cmd[:200]
-                tool_data["kind"] = "shell"
+                set_shell(tool_data, cmd, input_full=tool_input)
             else:
-                tool_data["input_summary"] = json.dumps(tool_input, ensure_ascii=False)[:200]
-                tool_data["kind"] = "structured"
+                set_structured(
+                    tool_data,
+                    input_summary=json.dumps(tool_input, ensure_ascii=False)[:200],
+                    input_full=tool_input,
+                )
         else:
-            tool_data["input_summary"] = str(tool_input)[:200]
-            tool_data["kind"] = "structured"
+            set_structured(tool_data, input_summary=str(tool_input)[:200])
     return tool_data
 
 

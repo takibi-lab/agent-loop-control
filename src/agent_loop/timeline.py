@@ -37,7 +37,11 @@ def _summarize(event: dict) -> str:
         else:
             paths = _path_values(tool)
             if paths:
-                parts.append(f"path={_clip(paths[0])}")
+                # Surface the first path plus an `(+N)` suffix so multi-file
+                # tools (MultiEdit, apply_patch over several files) don't get
+                # silently summarized down to a single filename.
+                suffix = f" (+{len(paths) - 1})" if len(paths) > 1 else ""
+                parts.append(f"path={_clip(paths[0])}{suffix}")
 
     policy = event.get("policy", {})
     if isinstance(policy, dict) and policy.get("decision"):
