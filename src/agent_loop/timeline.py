@@ -8,6 +8,13 @@ from agent_loop.ledger_reader import filter_events, load_events
 from agent_loop.verifier import verify_ledger
 
 
+def _clip(path: str, width: int = 60) -> str:
+    """Clip a path to ``width`` chars, keeping the trailing (most useful) end."""
+    if len(path) <= width:
+        return path
+    return "..." + path[-(width - 3) :]
+
+
 def _summarize(event: dict) -> str:
     etype = event.get("event_type", "unknown")
     ts = event.get("ts", "")[:19].replace("T", " ")
@@ -17,11 +24,20 @@ def _summarize(event: dict) -> str:
     tool = event.get("tool", {})
     if isinstance(tool, dict):
         name = tool.get("name", "")
-        cmd = tool.get("command") or tool.get("input_summary", "")
         if name:
             parts.append(f"tool={name}")
+        # Only a real shell `command` is rendered as `cmd=`. Non-shell tools
+        # (Write/Read/Edit/apply_patch/...) have no command, so falling back to
+        # `input_summary` would print raw tool-input JSON as if it were a shell
+        # command. Surface the affected file path instead, matching the
+        # `analyzer._action_key()` fix in PR #25.
+        cmd = tool.get("command") or ""
         if cmd:
             parts.append(f"cmd={cmd[:60]}")
+        else:
+            paths = _path_values(tool)
+            if paths:
+                parts.append(f"path={_clip(paths[0])}")
 
     policy = event.get("policy", {})
     if isinstance(policy, dict) and policy.get("decision"):
@@ -105,6 +121,10 @@ def print_search(
             if not isinstance(policy, dict) or policy.get("decision") != decision:
                 continue
         if command:
+            # `--command` is a search predicate, not a display field: it still
+            # matches `input_summary` so the raw tool-input JSON (e.g. Write
+            # content) stays searchable. The display itself is handled by
+            # `_summarize()`, which no longer renders that JSON as `cmd=`.
             tool = event.get("tool", {})
             cmd_val = ""
             if isinstance(tool, dict):

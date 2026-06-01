@@ -93,3 +93,65 @@ def test_search_file_path_matches_tool_input(tmp_path):
     assert result.exit_code == 0
     assert "tool.pre" in result.output
     assert "1 event(s) matched" in result.output
+
+
+def _append_write_event(ledger, *, file_path: str = "pyproject.toml") -> None:
+    """Append a non-shell tool event carrying raw tool-input JSON."""
+    raw_input = {"file_path": file_path, "content": "[build-system]\nrequires = []"}
+    append_event(
+        ledger,
+        build_event(
+            "tool.pre",
+            "claude-code",
+            extra={
+                "tool": {
+                    "name": "Write",
+                    "input_summary": json.dumps(raw_input),
+                    "input_full": raw_input,
+                }
+            },
+        ),
+    )
+
+
+def test_timeline_non_shell_tool_shows_path_not_input_json(tmp_path):
+    ledger = tmp_path / "l.jsonl"
+    _append_write_event(ledger, file_path="pyproject.toml")
+
+    result = CliRunner().invoke(main, ["timeline", str(ledger)])
+
+    assert result.exit_code == 0
+    assert "tool=Write" in result.output
+    assert "path=pyproject.toml" in result.output
+    # The raw tool-input JSON must not be rendered as a shell command.
+    assert "cmd={" not in result.output
+    assert '"content"' not in result.output
+
+
+def test_timeline_shell_tool_still_shows_cmd(tmp_path):
+    ledger = tmp_path / "l.jsonl"
+    append_event(
+        ledger,
+        build_event(
+            "tool.pre",
+            "claude-code",
+            extra={"tool": {"name": "Bash", "command": "git status --short"}},
+        ),
+    )
+
+    result = CliRunner().invoke(main, ["timeline", str(ledger)])
+
+    assert result.exit_code == 0
+    assert "cmd=git status --short" in result.output
+
+
+def test_search_command_predicate_still_matches_input_json(tmp_path):
+    ledger = tmp_path / "l.jsonl"
+    _append_write_event(ledger, file_path="pyproject.toml")
+
+    result = CliRunner().invoke(main, ["search", str(ledger), "--command", "build-system"])
+
+    assert result.exit_code == 0
+    assert "1 event(s) matched" in result.output
+    # Matched on input JSON, but the display still hides that JSON.
+    assert "cmd={" not in result.output
