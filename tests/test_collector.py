@@ -201,3 +201,63 @@ def test_ledger_integrity_after_multiple_events(tmp_path):
     result = verify_ledger(ledger)
     assert result["valid"] is True
     assert result["event_count"] == 4
+
+
+def test_synonym_path_key_is_classified(tmp_path, sample_policy_yaml):
+    """Security review Vuln #1: a third-party tool that names its file argument
+    ``filename`` (not ``file_path``) must still hit the path-glob deny rule.
+    """
+    ledger = tmp_path / "l.jsonl"
+    payload = _make_hook(
+        "PreToolUse",
+        tool_name="ThirdPartyMcpWriter",
+        tool_input={"filename": ".env", "content": "x"},
+    )
+    event = collect_hook_event(payload, ledger_path=ledger, policy_path=sample_policy_yaml)
+    assert event["policy"]["decision"] == "deny"
+    assert event["policy"]["rule_id"] == "deny-sensitive"
+
+
+def test_synonym_command_key_is_classified(tmp_path, sample_policy_yaml):
+    """Security review Vuln #1: ``cmd`` is treated like ``command`` for
+    command-prefix matching, so an attacker can't rename the field to bypass
+    deny rules.
+    """
+    ledger = tmp_path / "l.jsonl"
+    payload = _make_hook(
+        "PreToolUse",
+        tool_name="ThirdPartyShell",
+        tool_input={"cmd": "rm -rf build"},
+    )
+    event = collect_hook_event(payload, ledger_path=ledger, policy_path=sample_policy_yaml)
+    assert event["policy"]["decision"] == "deny"
+    assert event["policy"]["rule_id"] == "deny-destructive"
+
+
+def test_default_redaction_applies_without_policy(tmp_path):
+    """Security review Vuln #3: the no-policy path used to silently persist
+    secrets verbatim. A built-in pattern set now scrubs obvious credential
+    shapes (AWS, GitHub, Anthropic, OpenAI, key=value).
+    """
+    ledger = tmp_path / "l.jsonl"
+    payload = _make_hook(
+        "UserPromptSubmit",
+        prompt="please run AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE aws s3 ls",
+    )
+    collect_hook_event(payload, ledger_path=ledger)
+    ledger_text = ledger.read_text(encoding="utf-8")
+    assert "AKIAIOSFODNN7EXAMPLE" not in ledger_text
+    assert "[REDACTED" in ledger_text
+
+
+def test_default_redaction_scrubs_github_token_in_tool_input(tmp_path):
+    """Default redaction also covers tool_input fields, not just prompts."""
+    ledger = tmp_path / "l.jsonl"
+    payload = _make_hook(
+        "PreToolUse",
+        tool_name="Bash",
+        tool_input={"command": "GH_TOKEN=ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 gh pr list"},
+    )
+    collect_hook_event(payload, ledger_path=ledger)
+    ledger_text = ledger.read_text(encoding="utf-8")
+    assert "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789" not in ledger_text

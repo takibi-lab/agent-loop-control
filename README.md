@@ -224,6 +224,15 @@ needs a different rationale or risk label for each condition.
 
 ## MVP Trust Boundaries
 
+- The hash chain detects accidental corruption and partial tampering (truncated,
+  reordered, or out-of-band edits to individual events). By default it uses plain
+  SHA-256, so an attacker with write access to the ledger file plus knowledge of
+  the canonicalization format can recompute a chain and restore an internally
+  consistent state — `agent-loop verify` will accept the rewritten chain.
+  Set `AGENT_LOOP_LEDGER_SECRET=<random secret>` to switch the chain to
+  HMAC-SHA256, which keeps a rewrite from succeeding without also stealing the
+  secret. The secret must be set consistently for the lifetime of one chain;
+  mixing plain and HMAC events will fail verification.
 - Ledger writes use POSIX `fcntl` file locking. Windows support is best-effort in the
   MVP and does not provide the same locking guarantee.
 - The canonical deployment model is one local JSONL ledger, normally
@@ -240,6 +249,11 @@ needs a different rationale or risk label for each condition.
 - Provider-side logs and hidden model reasoning are not captured.
 - Redaction is best-effort and depends on policy-provided regular expressions. A weak
   pattern can miss secrets, and a pathological pattern can slow hook execution.
+- A small built-in redaction pattern set always runs (AWS access key IDs, GitHub /
+  Anthropic / OpenAI token prefixes, `key=value` credential assignments, Bearer
+  Authorization headers). It runs on top of any user-supplied policy patterns and
+  also when no `--policy-file` is given — so hook payloads aren't persisted with
+  obvious credentials even before an operator writes a policy.
 - Claude Code `tool.input_full` is persisted only after configured redaction has run.
 - If `redaction.enabled` is set to `false`, full hook inputs may be written to the
   local ledger without masking. Use this only for ledgers that cannot contain secrets.

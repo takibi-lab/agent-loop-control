@@ -470,12 +470,23 @@ def import_codex_session(
     When `policy_path` is given, each imported `tool.pre` event is classified
     against that policy and carries the resulting decision.
     """
-    from agent_loop.policy import load_policy
+    from agent_loop.policy import (
+        default_redaction_patterns,
+        load_policy,
+        load_redaction_patterns,
+        redact_event,
+    )
 
     p = Path(source_path)
     count = 0
     context = _ImportContext(cwd=normalize_path(cwd) if cwd else None)
     policy = load_policy(policy_path) if policy_path else None
+    # Imports always run default-policy redaction (Vuln #3 from the
+    # security review): without it, a malformed transcript line whose error
+    # context happens to embed a token would land in the ledger verbatim.
+    redaction_patterns = (
+        (load_redaction_patterns(policy) if policy else []) + default_redaction_patterns()
+    )
 
     with p.open("r", encoding="utf-8") as f:
         context.exec_end_call_ids = _scan_exec_end_call_ids(f)
@@ -488,16 +499,26 @@ def import_codex_session(
             try:
                 record = json.loads(raw)
             except json.JSONDecodeError as exc:
+                # ``json.JSONDecodeError`` embeds surrounding characters of the
+                # malformed line in its message. A line that was truncated
+                # mid-token can put a secret in that context; emit a generic
+                # message instead (full diagnostic still goes through redaction
+                # below).
                 event = build_event(
                     "blind_spot.declared",
                     agent,
                     session_id=context.session_id,
                     cwd=context.cwd,
                     extra={
-                        "blind_spots": [f"Line {lineno}: malformed JSON: {exc}", *_BLIND_SPOTS],
+                        "blind_spots": [
+                            f"Line {lineno}: malformed JSON ({exc.__class__.__name__})",
+                            *_BLIND_SPOTS,
+                        ],
                         **_repo_extra(context.cwd, context.repo_cache),
                     },
                 )
+                if redaction_patterns:
+                    event = redact_event(event, redaction_patterns)
                 append_event(ledger_path, event)
                 count += 1
                 continue
@@ -518,6 +539,8 @@ def import_codex_session(
             )
             if event is not None:
                 apply_policy_to_event(event, policy)
+                if redaction_patterns:
+                    event = redact_event(event, redaction_patterns)
                 append_event(ledger_path, event)
                 count += 1
 

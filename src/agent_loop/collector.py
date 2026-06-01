@@ -29,8 +29,20 @@ _BLIND_SPOTS = [
     "Some terminal output may be missing if the agent bypassed hooks.",
 ]
 
-_PATH_KEYS = {"file_path", "path", "paths", "target_file", "target_path", "notebook_path"}
-_COMMAND_KEYS = {"command", "commands", "args", "argv"}
+# Path / command keys feed ``classify_event``'s deep walk. They must cover the
+# realistic spellings third-party MCP tools and ad-hoc agents emit, otherwise a
+# tool that names its file argument ``filename`` or ``cmd`` slips past
+# path-glob / command-prefix deny rules. See security review Vuln #1.
+_PATH_KEYS = {
+    # Original (Claude Code / Codex native tools).
+    "file_path", "path", "paths", "target_file", "target_path", "notebook_path",
+    # Common synonyms across MCP servers / ad-hoc tools.
+    "filename", "file_name", "filepath", "filepaths", "filenames",
+    "source_path", "destination_path",
+    "output_path", "output_file",
+    "input_path", "input_file",
+}
+_COMMAND_KEYS = {"command", "commands", "args", "argv", "cmd", "cmdline", "cmd_line"}
 _DECISION_PRECEDENCE = {"deny": 0, "ask": 1, "allow": 2}
 
 
@@ -247,15 +259,17 @@ def collect_hook_event(
 
     event = _normalize_hook(hook_data)
 
+    # Always-on default redaction (covers common credential shapes) runs even
+    # when no policy is supplied, so leaving ``--policy-file`` unset doesn't
+    # silently persist secrets pasted into a prompt or tool input. A
+    # user-supplied policy's patterns are applied on top.
+    from agent_loop.policy import default_redaction_patterns, redact_event
+
     if policy_path:
-        from agent_loop.policy import (
-            load_policy,
-            load_redaction_patterns,
-            redact_event,
-        )
+        from agent_loop.policy import load_policy, load_redaction_patterns
 
         policy = load_policy(policy_path)
-        patterns = load_redaction_patterns(policy)
+        patterns = load_redaction_patterns(policy) + default_redaction_patterns()
 
         decision = classify_event(policy, event)
         event["policy"] = {
@@ -267,5 +281,7 @@ def collect_hook_event(
 
         if patterns:
             event = redact_event(event, patterns)
+    else:
+        event = redact_event(event, default_redaction_patterns())
 
     return append_event(ledger_path, event)

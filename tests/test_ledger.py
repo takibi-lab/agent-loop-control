@@ -156,3 +156,36 @@ def test_concurrent_appends_preserve_chain(tmp_path):
     result = verify_ledger(ledger)
     assert result["valid"] is True
     assert result["event_count"] == 50
+
+
+def test_hmac_mode_changes_hash_when_secret_set(tmp_path, monkeypatch):
+    """Security review Vuln #2: ``AGENT_LOOP_LEDGER_SECRET`` switches the
+    chain to HMAC-SHA256 so a rewrite needs the secret too. We just verify
+    the hash function picks up the env var (same input → different output
+    in HMAC mode), and that a chain written with the secret round-trips
+    through ``verify_ledger`` with the same secret.
+    """
+    monkeypatch.delenv("AGENT_LOOP_LEDGER_SECRET", raising=False)
+    plain = _sha256(b"hello")
+
+    monkeypatch.setenv("AGENT_LOOP_LEDGER_SECRET", "rotate-me-please")
+    hmac_hash = _sha256(b"hello")
+    assert plain != hmac_hash
+
+    ledger = tmp_path / "ledger.jsonl"
+    for _ in range(3):
+        append_event(ledger, build_event("session.start", "test-agent"))
+    assert verify_ledger(ledger)["valid"] is True
+
+
+def test_hmac_chain_rejects_verification_without_secret(tmp_path, monkeypatch):
+    """A chain written under HMAC must fail verification when the secret is
+    absent — that is the property the env var buys.
+    """
+    monkeypatch.setenv("AGENT_LOOP_LEDGER_SECRET", "rotate-me-please")
+    ledger = tmp_path / "ledger.jsonl"
+    append_event(ledger, build_event("session.start", "test-agent"))
+
+    monkeypatch.delenv("AGENT_LOOP_LEDGER_SECRET", raising=False)
+    result = verify_ledger(ledger)
+    assert result["valid"] is False
