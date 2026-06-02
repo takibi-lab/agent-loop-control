@@ -13,6 +13,43 @@ from yaml import YAMLError
 _DEFAULT_RISK = "unknown"
 _METADATA_KEYS = {"hash", "prev_hash", "event_id", "ts", "schema_version"}
 
+# Built-in redaction patterns applied by ``default_redaction_patterns()`` when
+# no ``--policy-file`` is supplied. These are intentionally conservative — only
+# well-known credential shapes that produce essentially no false positives.
+# Operators who want broader redaction should ship their own policy.
+_DEFAULT_REDACTION_PATTERN_SPECS: list[dict[str, str]] = [
+    {
+        "name": "generic-secret-assignment",
+        "regex": r"(?i)((?:api[_-]?key|secret|token|password|passwd|access[_-]?key)\s*[:=]\s*)['\"]?([A-Za-z0-9_\-/+]{12,})['\"]?",
+        "replacement": r"\1[REDACTED]",
+    },
+    {
+        "name": "aws-access-key-id",
+        "regex": r"\b(AKIA[0-9A-Z]{16})\b",
+        "replacement": "[REDACTED-AWS-AKID]",
+    },
+    {
+        "name": "github-token",
+        "regex": r"\b(gh[pousr]_[A-Za-z0-9]{20,})\b",
+        "replacement": "[REDACTED-GITHUB-TOKEN]",
+    },
+    {
+        "name": "anthropic-api-key",
+        "regex": r"\b(sk-ant-[A-Za-z0-9_\-]{20,})\b",
+        "replacement": "[REDACTED-ANTHROPIC-KEY]",
+    },
+    {
+        "name": "openai-api-key",
+        "regex": r"\b(sk-[A-Za-z0-9]{20,})\b",
+        "replacement": "[REDACTED-OPENAI-KEY]",
+    },
+    {
+        "name": "bearer-authorization-header",
+        "regex": r"(?i)(authorization\s*:\s*bearer\s+)[A-Za-z0-9_\-.]{20,}",
+        "replacement": r"\1[REDACTED]",
+    },
+]
+
 
 class PolicyValidationError(ValueError):
     """Raised when a policy file is invalid."""
@@ -186,6 +223,28 @@ def load_redaction_patterns(policy: dict) -> list[dict]:
             errors.append(f"redaction.patterns[{index}] {p.get('name', index)!r}: invalid regex: {exc}")
     if errors:
         raise PolicyValidationError(errors)
+    return result
+
+
+def default_redaction_patterns() -> list[dict]:
+    """Return a conservative built-in pattern set, applied when no policy is given.
+
+    Operators who supply ``--policy-file`` get only what their policy declares
+    (the explicit choice wins). Without a policy, hook collectors and importers
+    fall back to this set so prompts and tool inputs that contain obvious
+    credentials are not written to the ledger verbatim. See Issue (security
+    review Vuln #3): the hook collector previously skipped redaction entirely
+    in the no-policy default.
+    """
+    result: list[dict] = []
+    for spec in _DEFAULT_REDACTION_PATTERN_SPECS:
+        result.append(
+            {
+                "name": spec["name"],
+                "pattern": re.compile(spec["regex"]),
+                "replacement": spec["replacement"],
+            }
+        )
     return result
 
 

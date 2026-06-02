@@ -472,6 +472,7 @@ def _import_claude_file(
     *,
     sub_agent: dict[str, Any] | None = None,
     policy: dict[str, Any] | None = None,
+    redaction_patterns: list[dict] | None = None,
 ) -> int:
     count = 0
     with source_path.open("r", encoding="utf-8") as f:
@@ -482,17 +483,28 @@ def _import_claude_file(
             try:
                 record = json.loads(raw)
             except json.JSONDecodeError as exc:
+                # JSONDecodeError messages embed the malformed bytes verbatim;
+                # use a class-only summary so a truncated secret can't be
+                # smuggled into the ledger via the diagnostic.
                 event = build_event(
                     "blind_spot.declared",
                     agent,
                     session_id=context.session_id,
                     cwd=context.cwd,
                     extra={
-                        "blind_spots": [f"Line {lineno}: malformed JSON: {exc}", *_BLIND_SPOTS],
+                        "blind_spots": [
+                            f"Line {lineno}: malformed JSON ({exc.__class__.__name__})",
+                            *_BLIND_SPOTS,
+                        ],
                         **_repo_extra(context.cwd, context.repo_cache),
                     },
                 )
-                append_event(ledger_path, _attribute([event], sub_agent)[0])
+                event = _attribute([event], sub_agent)[0]
+                if redaction_patterns:
+                    from agent_loop.policy import redact_event
+
+                    event = redact_event(event, redaction_patterns)
+                append_event(ledger_path, event)
                 count += 1
                 continue
 
@@ -508,6 +520,10 @@ def _import_claude_file(
 
             for event in _normalize_claude_record(record, agent, context, sub_agent=sub_agent):
                 apply_policy_to_event(event, policy)
+                if redaction_patterns:
+                    from agent_loop.policy import redact_event
+
+                    event = redact_event(event, redaction_patterns)
                 append_event(ledger_path, event)
                 count += 1
 
@@ -551,13 +567,27 @@ def import_claude_session(
     given, each imported `tool.pre` event is classified against that policy.
     Returns the count of appended events.
     """
-    from agent_loop.policy import load_policy
+    from agent_loop.policy import (
+        default_redaction_patterns,
+        load_policy,
+        load_redaction_patterns,
+    )
 
     p = Path(source_path)
     context = _ClaudeContext(cwd=normalize_path(cwd) if cwd else None)
     policy = load_policy(policy_path) if policy_path else None
+    redaction_patterns = (
+        (load_redaction_patterns(policy) if policy else []) + default_redaction_patterns()
+    )
 
-    count = _import_claude_file(p, ledger_path, agent, context, policy=policy)
+    count = _import_claude_file(
+        p,
+        ledger_path,
+        agent,
+        context,
+        policy=policy,
+        redaction_patterns=redaction_patterns,
+    )
 
     if include_subagents:
         sub_dir = p.parent / p.stem / "subagents"
@@ -571,6 +601,7 @@ def import_claude_session(
                     context,
                     sub_agent=sub_agent,
                     policy=policy,
+                    redaction_patterns=redaction_patterns,
                 )
 
     return count

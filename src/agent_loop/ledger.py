@@ -1,6 +1,7 @@
 """Append-only JSONL ledger writer with hash-chain support."""
 
 import hashlib
+import hmac
 import json
 import os
 import sys
@@ -25,6 +26,21 @@ _LAST_HASH_CACHE: dict[Path, tuple[int, str | None]] = {}
 _PATH_LOCKS: dict[Path, threading.Lock] = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
+# Optional HMAC key. When set, the chain uses HMAC-SHA256 instead of plain
+# SHA-256 so an attacker with write access to the ledger file alone cannot
+# rebuild a valid chain after a rewrite (security review Vuln #2). The key
+# must be set consistently for the entire lifetime of a chain; mixing modes
+# will fail verification. See ``README.md`` -> "MVP Trust Boundaries".
+_LEDGER_SECRET_ENV = "AGENT_LOOP_LEDGER_SECRET"
+
+
+def _ledger_secret() -> bytes | None:
+    """Return the configured HMAC secret as bytes, or ``None`` for plain mode."""
+    secret = os.environ.get(_LEDGER_SECRET_ENV)
+    if not secret:
+        return None
+    return secret.encode("utf-8")
+
 
 def _canonical_bytes(event: dict) -> bytes:
     """Return canonical JSON bytes of event excluding the 'hash' field."""
@@ -33,6 +49,9 @@ def _canonical_bytes(event: dict) -> bytes:
 
 
 def _sha256(data: bytes) -> str:
+    secret = _ledger_secret()
+    if secret is not None:
+        return hmac.new(secret, data, hashlib.sha256).hexdigest()
     return hashlib.sha256(data).hexdigest()
 
 
